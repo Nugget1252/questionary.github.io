@@ -3071,14 +3071,14 @@ window.addEventListener('contextmenu', e => {
       const downloadMsi = document.getElementById('downloadMsi');
       
       if (downloadExe) {
-        downloadExe.href = 'https://github.com/Nugget1252/Questionarytauri/releases/download/v0.2.1/Questionary_0.2.1_x64-setup.exe'; // Replace with actual .exe download URL
+        downloadExe.href = 'https://github.com/Nugget1252/Questionarytauri/releases/download/v0.4.0/Questionary_0.4.0_x64-setup.exe'; // Replace with actual .exe download URL
         downloadExe.addEventListener('click', () => {
           showNotification('Download started for .exe installer', 'info');
         });
       }
       
       if (downloadMsi) {
-        downloadMsi.href = 'https://github.com/Nugget1252/Questionarytauri/releases/download/v0.2.1/Questionary_0.2.1_x64_en-US.msi'; // Replace with actual .msi download URL
+        downloadMsi.href = 'https://github.com/Nugget1252/Questionarytauri/releases/download/v0.4.0/Questionary_0.4.0_x64_en-US.msi'; // Replace with actual .msi download URL
         downloadMsi.addEventListener('click', () => {
           showNotification('Download started for .msi installer', 'info');
         });
@@ -3804,4 +3804,5 @@ document.addEventListener('keydown', (e) => {
     panel?.classList.toggle('active');
   }
 });
+
 
