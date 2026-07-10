@@ -8,6 +8,8 @@ let flashcardDecks = [];
 let studySessions = [];
 let documentProgress = {};
 let quickLinks = [];
+let documents = {}; // Declared early, will be populated below
+window.documents = documents; // Expose immediately
 let studyStats = { totalTime: 0, streak: 0, lastStudyDate: null, hourlyActivity: {} };
 let currentCalendarDate = new Date();
 let currentEditingNote = null;
@@ -238,6 +240,132 @@ function showNotification(message, type = 'info') {
   }, 3000);
 }
 
+// ============================================
+// STYLED DIALOG SYSTEM (replaces confirm/prompt/alert)
+// ============================================
+
+function _createDialogOverlay() {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  document.body.appendChild(overlay);
+  // Animate in
+  requestAnimationFrame(() => overlay.classList.add('active'));
+  return overlay;
+}
+
+function _closeDialog(overlay) {
+  overlay.classList.remove('active');
+  setTimeout(() => overlay.remove(), 200);
+}
+
+/**
+ * Styled confirm dialog — returns Promise<boolean>
+ * @param {string} message - The question to ask
+ * @param {object} opts - { title, confirmText, cancelText, type }
+ */
+function showConfirm(message, opts = {}) {
+  const { title = 'Confirm', confirmText = 'OK', cancelText = 'Cancel', type = 'warning' } = opts;
+  return new Promise(resolve => {
+    const overlay = _createDialogOverlay();
+    const iconMap = { warning: 'fa-exclamation-triangle', danger: 'fa-trash-alt', info: 'fa-info-circle', question: 'fa-question-circle' };
+    const colorMap = { warning: 'var(--yellow, #f59e0b)', danger: 'var(--red, #ef4444)', info: 'var(--accent)', question: 'var(--accent)' };
+    const icon = iconMap[type] || iconMap.question;
+    const color = colorMap[type] || colorMap.question;
+
+    overlay.innerHTML = `
+      <div class="dialog-box">
+        <div class="dialog-icon" style="color: ${color}"><i class="fas ${icon}"></i></div>
+        <h3 class="dialog-title">${title}</h3>
+        <p class="dialog-message">${message}</p>
+        <div class="dialog-actions">
+          <button class="dialog-btn dialog-btn-cancel">${cancelText}</button>
+          <button class="dialog-btn dialog-btn-confirm" style="background: ${type === 'danger' ? 'var(--red, #ef4444)' : 'var(--accent)'}">${confirmText}</button>
+        </div>
+      </div>
+    `;
+
+    const close = (val) => { _closeDialog(overlay); resolve(val); };
+    overlay.querySelector('.dialog-btn-cancel').onclick = () => close(false);
+    overlay.querySelector('.dialog-btn-confirm').onclick = () => close(true);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(false); });
+    // Focus confirm button
+    overlay.querySelector('.dialog-btn-confirm').focus();
+  });
+}
+window.showConfirm = showConfirm;
+
+/**
+ * Styled prompt dialog — returns Promise<string|null>
+ * @param {string} message - The label/question
+ * @param {object} opts - { title, defaultValue, placeholder, confirmText, cancelText }
+ */
+function showPrompt(message, opts = {}) {
+  const { title = 'Input', defaultValue = '', placeholder = '', confirmText = 'Save', cancelText = 'Cancel' } = opts;
+  return new Promise(resolve => {
+    const overlay = _createDialogOverlay();
+
+    overlay.innerHTML = `
+      <div class="dialog-box">
+        <div class="dialog-icon" style="color: var(--accent)"><i class="fas fa-pen"></i></div>
+        <h3 class="dialog-title">${title}</h3>
+        <p class="dialog-message">${message}</p>
+        <input class="dialog-input" type="text" value="${defaultValue.replace(/"/g, '&quot;')}" placeholder="${placeholder}" spellcheck="false" />
+        <div class="dialog-actions">
+          <button class="dialog-btn dialog-btn-cancel">${cancelText}</button>
+          <button class="dialog-btn dialog-btn-confirm">${confirmText}</button>
+        </div>
+      </div>
+    `;
+
+    const input = overlay.querySelector('.dialog-input');
+    const close = (val) => { _closeDialog(overlay); resolve(val); };
+    overlay.querySelector('.dialog-btn-cancel').onclick = () => close(null);
+    overlay.querySelector('.dialog-btn-confirm').onclick = () => {
+      const v = input.value.trim();
+      close(v || null);
+    };
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { const v = input.value.trim(); close(v || null); }
+      if (e.key === 'Escape') close(null);
+    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(null); });
+    // Focus & select input
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+  });
+}
+window.showPrompt = showPrompt;
+
+/**
+ * Styled info dialog — replaces alert()
+ * @param {string} message - Content (supports HTML)
+ * @param {object} opts - { title, buttonText, type }
+ */
+function showInfoDialog(message, opts = {}) {
+  const { title = 'Info', buttonText = 'OK', type = 'info' } = opts;
+  return new Promise(resolve => {
+    const overlay = _createDialogOverlay();
+    const iconMap = { info: 'fa-info-circle', success: 'fa-check-circle', warning: 'fa-exclamation-triangle', error: 'fa-exclamation-circle' };
+    const colorMap = { info: 'var(--accent)', success: 'var(--green, #22c55e)', warning: 'var(--yellow, #f59e0b)', error: 'var(--red, #ef4444)' };
+
+    overlay.innerHTML = `
+      <div class="dialog-box">
+        <div class="dialog-icon" style="color: ${colorMap[type] || colorMap.info}"><i class="fas ${iconMap[type] || iconMap.info}"></i></div>
+        <h3 class="dialog-title">${title}</h3>
+        <div class="dialog-message dialog-message-scrollable">${message}</div>
+        <div class="dialog-actions">
+          <button class="dialog-btn dialog-btn-confirm">${buttonText}</button>
+        </div>
+      </div>
+    `;
+
+    const close = () => { _closeDialog(overlay); resolve(); };
+    overlay.querySelector('.dialog-btn-confirm').onclick = close;
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    overlay.querySelector('.dialog-btn-confirm').focus();
+  });
+}
+window.showInfoDialog = showInfoDialog;
+
 function initializeAppAfterLogin() {
     const usernameDisplay = document.getElementById('username-display');
   if (usernameDisplay && currentUser) {
@@ -254,7 +382,7 @@ function initializeAppAfterLogin() {
   }
   
     if (typeof renderTiles === 'function' && typeof documents !== 'undefined') {
-    renderTiles(documents);
+    renderTiles(window.documents || documents);
   }
   
     if (typeof updateBreadcrumb === 'function') {
@@ -504,13 +632,107 @@ function trackDailyAccess() {
   accessData[today] = (accessData[today] || 0) + 1;
   localStorage.setItem('questionary-daily-access', JSON.stringify(accessData));
 }
-function saveUserPreferences() {  }
+
+function saveUserPreferences() {
+  // Save current location/view for remember location feature
+  const settings = JSON.parse(localStorage.getItem('questionary-settings') || '{}');
+  if (settings.rememberLocation !== false) {
+    localStorage.setItem('questionary-last-view', currentView);
+    localStorage.setItem('questionary-last-path', JSON.stringify(path));
+  }
+}
+
+function restoreLastLocation() {
+  const settings = JSON.parse(localStorage.getItem('questionary-settings') || '{}');
+  if (settings.rememberLocation !== false) {
+    const lastView = localStorage.getItem('questionary-last-view');
+    const lastPath = JSON.parse(localStorage.getItem('questionary-last-path') || '[]');
+    
+    if (lastView && lastView !== 'home') {
+      showView(lastView);
+      // Update active nav
+      const navMap = {
+        'home': 'homeNav',
+        'favorites': 'favoritesNav',
+        'recent': 'recentNav',
+        'analytics': 'analyticsNav',
+        'planner': 'plannerNav',
+        'flashcards': 'flashcardsNav',
+        'notes': 'notesNav',
+        'progress': 'progressNav',
+        'reminders': 'remindersNav',
+        'settings': 'settingsNav',
+        'tags': 'tagsNav'
+      };
+      if (navMap[lastView]) {
+        setActiveNav(navMap[lastView]);
+      }
+    } else {
+      // Always call showView('home') to ensure home panels are shown
+      showView('home');
+      setActiveNav('homeNav');
+      
+      if (lastPath && lastPath.length > 0) {
+        // Restore path within documents
+        path = lastPath;
+        let current = documents;
+        for (const p of path) {
+          if (current[p] && typeof current[p] === 'object') {
+            current = current[p];
+          } else {
+            path = [];
+            current = documents;
+            break;
+          }
+        }
+        renderTiles(current);
+        updateBreadcrumb();
+      }
+    }
+  } else {
+    // Default to home view
+    showView('home');
+    setActiveNav('homeNav');
+  }
+}
+
+// Get current level of documents based on path
+function getCurrentDocumentsLevel() {
+  // Access documents via window to ensure we get the latest value
+  const docs = window.documents || documents;
+  if (!docs || Object.keys(docs).length === 0) {
+    console.warn('Documents not loaded yet');
+    return {};
+  }
+  let current = docs;
+  for (const p of path) {
+    if (current[p] && typeof current[p] === 'object') {
+      current = current[p];
+    } else {
+      return docs;
+    }
+  }
+  return current;
+}
 
 function renderTiles(docs) {
+  console.log('renderTiles called with:', docs);
+  console.log('documents variable:', documents);
   const container = document.getElementById('tilesContainer');
   if (!container) {
     console.error('tilesContainer not found');
     return;
+  }
+  
+  // Show PDF Library and home tags panels only at root level
+  const importedSection = document.getElementById('importedSection');
+  if (importedSection) {
+    importedSection.style.display = path.length === 0 ? 'block' : 'none';
+  }
+  if (path.length === 0) {
+    showHomeTagsPanels();
+  } else {
+    hideHomeTagsPanels();
   }
   
   container.innerHTML = '';
@@ -531,19 +753,52 @@ function renderTiles(docs) {
     
     const tile = document.createElement('div');
     tile.className = 'tile';
+    
+        const isMissingPdf = !isFolder && (!value || value === '#' || value === '');
+        const isImportedPdf = !isFolder && typeof value === 'string' && value.startsWith('blob-id:');
+        // Check if this folder/item was moved from the library (user-added, not hardcoded)
+        const isCustomItem = (() => {
+          try {
+            const custom = JSON.parse(localStorage.getItem('questionary-custom-documents') || '{}');
+            let level = custom;
+            for (const seg of path) { level = level?.[seg]; }
+            return level && level[key] !== undefined;
+          } catch { return false; }
+        })();
+    
+    
+    const itemPath = [...path, key];
+    const itemPathJson = JSON.stringify(itemPath).replace(/"/g, '&quot;');
+    const itemId = isFolder ? `folder_${itemPath.join('/')}` : `doc_${itemPath.join('/')}`;
+    
     tile.innerHTML = `
+      <div class="tile-top-bar">
+        <button onclick="event.stopPropagation(); openTagItemModal('${escapeHtml(itemId)}', '${escapeHtml(key)}', '${isFolder ? 'folder' : 'document'}')" title="Tags"><i class="fas fa-tag"></i></button>
+        ${isFolder ? `<button onclick="event.stopPropagation(); addFolderToQuickLinks('${escapeHtml(key)}', ${itemPathJson})" title="Quick Link"><i class="fas fa-link"></i></button>` : ''}
+        ${!isFolder && !isMissingPdf ? `<button onclick="event.stopPropagation(); toggleFavorite('${escapeHtml(key)}', ${itemPathJson}, '${escapeHtml(value)}')" title="Favorite"><i class="fas fa-star"></i></button>` : ''}
+        ${isImportedPdf || (isFolder && isCustomItem) ? `<button onclick="event.stopPropagation(); moveDocumentItemToLibrary('${escapeHtml(key)}')" title="Move to Library"><i class="fas fa-book-open"></i></button>` : ''}
+      </div>
       <div class="tile-icon">
-        <i class="fas ${isFolder ? 'fa-folder' : 'fa-file-pdf'}"></i>
+        <i class="fas ${isFolder ? 'fa-folder' : (key.endsWith('.png') ? 'fa-image' : 'fa-file-pdf')}"></i>
       </div>
       <div class="tile-text">${escapeHtml(key)}</div>
-      ${!isFolder ? `<button class="tile-favorite" onclick="event.stopPropagation(); toggleFavorite('${escapeHtml(key)}', ${JSON.stringify([...path, key]).replace(/"/g, '&quot;')}, '${escapeHtml(value)}')" title="Toggle Favorite"><i class="fas fa-star"></i></button>` : ''}
+      ${isMissingPdf ? `<div class="pdf-missing-badge"><i class="fas fa-exclamation-triangle"></i> Not Available</div>` : ''}
     `;
+    
+        if (isMissingPdf) {
+      tile.classList.add('pdf-missing');
+    }
     
     tile.onclick = () => {
       if (isFolder) {
         path.push(key);
         renderTiles(value);
         updateBreadcrumb();
+      } else if (isMissingPdf) {
+        showNotification('This PDF is not available yet', 'warning');
+      } else if (key.endsWith('.png') || key.endsWith('.jpg') || key.endsWith('.jpeg') || key.endsWith('.webp')) {
+        addToRecent(key, [...path, key], value);
+        showImage(value, key);
       } else {
                 addToRecent(key, [...path, key], value);
         showPDF(value);
@@ -554,6 +809,30 @@ function renderTiles(docs) {
   });
   
     updateDashboardStats();
+}
+
+// Expose renderTiles globally
+window.renderTiles = renderTiles;
+
+async function checkPdfExists(pdfPath) {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('HEAD', pdfPath, true);
+    
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState === 4) {
+        console.log('PDF check:', pdfPath, 'status:', xhr.status);
+                resolve(xhr.status === 200 || xhr.status === 206);
+      }
+    };
+    
+    xhr.onerror = function() {
+      console.log('PDF check error:', pdfPath);
+      resolve(false);
+    };
+    
+    xhr.send();
+  });
 }
 
 function updateBreadcrumb() {
@@ -599,37 +878,56 @@ function updateBreadcrumb() {
 function navigateToPath(newPath) {
   console.log('navigateToPath called with:', newPath);
   
-    const pdfViewer = document.getElementById('pdfViewer');
+  
+  if (!Array.isArray(newPath)) {
+    console.warn('navigateToPath: newPath is not an array, resetting to home');
+    newPath = [];
+  }
+  newPath = newPath.filter(segment => segment && segment.trim() !== '');
+  console.log('navigateToPath filtered path:', newPath);
+  
+  const pdfViewer = document.getElementById('pdfViewer');
   if (pdfViewer) {
-    pdfViewer.style.cssText = 'display: none !important;';
     pdfViewer.classList.remove('active');
     pdfViewer.src = '';
   }
+  const pdfViewerContainer = document.getElementById('pdfViewerContainer');
+  if (pdfViewerContainer) pdfViewerContainer.style.display = 'none';
+  const bookmarksPanel = document.getElementById('pdfBookmarksPanel');
+  if (bookmarksPanel) bookmarksPanel.style.display = 'none';
   
-    const tilesContainer = document.getElementById('tilesContainer');
+  const tilesContainer = document.getElementById('tilesContainer');
   const sectionHeader = document.querySelector('#tilesSection .section-header');
   const dashboardHeader = document.querySelector('.dashboard-header');
   const tilesSection = document.getElementById('tilesSection');
   
   if (tilesSection) tilesSection.style.display = 'block';
-  if (tilesContainer) tilesContainer.style.display = 'grid';
+  if (tilesContainer) {
+    const isListView = tilesContainer.classList.contains('list-view');
+    tilesContainer.style.display = isListView ? 'flex' : 'grid';
+  }
   if (sectionHeader) sectionHeader.style.display = 'flex';
   if (dashboardHeader) dashboardHeader.style.display = newPath.length === 0 ? 'flex' : 'none';
   
-    if (typeof hideTimerCompletely === 'function') hideTimerCompletely();
+  if (typeof hideTimerCompletely === 'function') hideTimerCompletely();
   
-    path = newPath;
   
-    let level = documents;
-  for (const segment of path) {
+  let docsSrc = window.documents || documents;
+  let level = docsSrc;
+  let validPath = [];
+  for (const segment of newPath) {
     if (level && typeof level === 'object' && level[segment]) {
       level = level[segment];
+      validPath.push(segment);
     } else {
-            path = [];
-      level = documents;
+      console.warn('navigateToPath: Invalid path segment:', segment, 'at path:', validPath);
       break;
     }
   }
+  
+  
+  path = validPath;
+  console.log('navigateToPath: Final path:', path);
   
   renderTiles(level);
   updateBreadcrumb();
@@ -687,17 +985,49 @@ function showPDF(url) {
     return;
   }
   
+  // Handle blob-id: references (PDFs stored in IndexedDB)
+  if (typeof url === 'string' && url.startsWith('blob-id:')) {
+    const blobId = url.replace('blob-id:', '');
+    if (typeof getPdfBlob === 'function') {
+      getPdfBlob(blobId).then(blob => {
+        if (blob) {
+          const objectUrl = URL.createObjectURL(blob);
+          showPDF(objectUrl);
+        } else {
+          showNotification('PDF data not found – it may need to be re-imported', 'error');
+        }
+      }).catch(err => {
+        console.error('Failed to load PDF from IndexedDB:', err);
+        showNotification('Failed to load PDF', 'error');
+      });
+    } else {
+      showNotification('PDF storage not available', 'error');
+    }
+    return;
+  }
+  
   const pdfViewer = document.getElementById('pdfViewer');
+  const pdfViewerContainer = document.getElementById('pdfViewerContainer');
   const tilesContainer = document.getElementById('tilesContainer');
   const sectionHeader = document.querySelector('#tilesSection .section-header');
   const dashboardHeader = document.querySelector('.dashboard-header');
   const breadcrumbContainer = document.querySelector('.breadcrumb-container');
   const tilesSection = document.getElementById('tilesSection');
   
+    const filename = url.split('/').pop().replace('.pdf', '').replace(/%20/g, ' ');
+  window.setCurrentPDF && window.setCurrentPDF(url, filename);
+  
     if (pdfViewer) {
-    pdfViewer.src = url;
+    // Convert relative URL to absolute so pdfviewer.html can always fetch it
+    const absoluteUrl = new URL(url, window.location.href).href;
+    pdfViewer.src = 'pdfviewer.html?file=' + encodeURIComponent(absoluteUrl);
     pdfViewer.classList.add('active');
-    pdfViewer.style.cssText = '';     console.log('PDF viewer should now be visible, src:', url);
+    // Fallback: also send URL via postMessage once iframe loads
+    pdfViewer.onload = function() {
+      pdfViewer.contentWindow.postMessage({ type: 'loadPdf', url: absoluteUrl }, '*');
+      pdfViewer.onload = null;
+    };
+    console.log('PDF viewer loading:', absoluteUrl);
   } else {
     console.error('PDF viewer element not found!');
     return;
@@ -708,6 +1038,27 @@ function showPDF(url) {
     if (tilesContainer) tilesContainer.style.display = 'none';
   if (sectionHeader) sectionHeader.style.display = 'none';
   if (dashboardHeader) dashboardHeader.style.display = 'none';
+  const importedSection = document.getElementById('importedSection');
+  if (importedSection) importedSection.style.display = 'none';
+  if (typeof hideHomeTagsPanels === 'function') hideHomeTagsPanels();
+  
+  // Show the PDF viewer container with toolbar
+  if (pdfViewerContainer) {
+    pdfViewerContainer.style.display = 'block';
+    const pdfNameEl = document.getElementById('currentPdfName');
+    if (pdfNameEl) pdfNameEl.textContent = filename;
+    
+    // Update bookmarks for this PDF
+    if (typeof renderPdfBookmarks === 'function') {
+      renderPdfBookmarks(url);
+    }
+    // Store current PDF URL for bookmarking
+    if (typeof window.setCurrentPdfForBookmarks === 'function') {
+      window.setCurrentPdfForBookmarks(url);
+    } else {
+      window.currentPdfUrlForBookmarks = url;
+    }
+  }
   
     if (breadcrumbContainer) breadcrumbContainer.style.display = 'flex';
   
@@ -723,24 +1074,138 @@ function showPDF(url) {
 
 function closePDF() {
   const pdfViewer = document.getElementById('pdfViewer');
+  const pdfViewerContainer = document.getElementById('pdfViewerContainer');
   const tilesContainer = document.getElementById('tilesContainer');
   const sectionHeader = document.querySelector('#tilesSection .section-header');
   const dashboardHeader = document.querySelector('.dashboard-header');
   
+    window.clearCurrentPDF && window.clearCurrentPDF();
+  
   if (pdfViewer) {
-    pdfViewer.style.cssText = 'display: none !important;';
+    // Just remove active class and clear src — don't nuke inline styles
     pdfViewer.classList.remove('active');
     pdfViewer.src = '';
   }
   
-  if (tilesContainer) tilesContainer.style.display = 'grid';
+  // Hide the entire PDF viewer container (includes toolbar, iframe, bookmarks)
+  if (pdfViewerContainer) {
+    pdfViewerContainer.style.display = 'none';
+  }
+  
+  // Hide bookmarks panel so it starts closed next time
+  const bookmarksPanel = document.getElementById('pdfBookmarksPanel');
+  if (bookmarksPanel) bookmarksPanel.style.display = 'none';
+  
+  // Clear current PDF URL for bookmarking
+  window.currentPdfUrlForBookmarks = null;
+  
+  // Restore tiles — respect list-view mode if active
+  if (tilesContainer) {
+    const isListView = tilesContainer.classList.contains('list-view');
+    tilesContainer.style.display = isListView ? 'flex' : 'grid';
+  }
   if (sectionHeader) sectionHeader.style.display = 'flex';
-  if (dashboardHeader && path.length === 0) dashboardHeader.style.display = 'flex';
+  
+  if (path.length === 0) {
+    if (dashboardHeader) dashboardHeader.style.display = 'flex';
+    const importedSection = document.getElementById('importedSection');
+    if (importedSection) importedSection.style.display = 'block';
+    if (typeof showHomeTagsPanels === 'function') showHomeTagsPanels();
+  }
   
   if (typeof hideTimerCompletely === 'function') hideTimerCompletely();
   
     if (typeof trackPdfViewEnd === 'function') trackPdfViewEnd(path.join('/'));
 }
+
+/* --- Image Viewer (for whiteboards & saved images) --- */
+let _currentImageBlobUrl = null;
+let _currentImageName = '';
+
+function showImage(url, name) {
+  if (!url) return;
+  _currentImageName = name || 'Image';
+
+  // Handle blob-id: references (images stored in IndexedDB)
+  if (typeof url === 'string' && url.startsWith('blob-id:')) {
+    const blobId = url.replace('blob-id:', '');
+    if (typeof getPdfBlob === 'function') {
+      getPdfBlob(blobId).then(blob => {
+        if (blob) {
+          _currentImageBlobUrl = URL.createObjectURL(blob);
+          _displayImageViewer(_currentImageBlobUrl, name);
+        } else {
+          showNotification('Image data not found', 'error');
+        }
+      }).catch(err => {
+        console.error('Failed to load image:', err);
+        showNotification('Failed to load image', 'error');
+      });
+    }
+    return;
+  }
+
+  // Direct URL
+  _currentImageBlobUrl = url;
+  _displayImageViewer(url, name);
+}
+
+function _displayImageViewer(imgSrc, name) {
+  const container = document.getElementById('imageViewerContainer');
+  const img = document.getElementById('imageViewerImg');
+  const nameEl = document.getElementById('currentImageName');
+  const tilesContainer = document.getElementById('tilesContainer');
+  const sectionHeader = document.querySelector('#tilesSection .section-header');
+  const dashboardHeader = document.querySelector('.dashboard-header');
+  const breadcrumbContainer = document.querySelector('.breadcrumb-container');
+
+  if (img) img.src = imgSrc;
+  if (nameEl) nameEl.textContent = name || 'Image';
+  if (container) container.style.display = 'block';
+  if (tilesContainer) tilesContainer.style.display = 'none';
+  if (sectionHeader) sectionHeader.style.display = 'none';
+  if (dashboardHeader) dashboardHeader.style.display = 'none';
+  if (breadcrumbContainer) breadcrumbContainer.style.display = 'flex';
+  updateBreadcrumb();
+}
+
+function closeImageViewer() {
+  const container = document.getElementById('imageViewerContainer');
+  const img = document.getElementById('imageViewerImg');
+  const tilesContainer = document.getElementById('tilesContainer');
+  const sectionHeader = document.querySelector('#tilesSection .section-header');
+  const dashboardHeader = document.querySelector('.dashboard-header');
+
+  if (container) container.style.display = 'none';
+  if (img) img.src = '';
+  if (_currentImageBlobUrl && _currentImageBlobUrl.startsWith('blob:')) {
+    URL.revokeObjectURL(_currentImageBlobUrl);
+  }
+  _currentImageBlobUrl = null;
+
+  if (tilesContainer) {
+    const isListView = tilesContainer.classList.contains('list-view');
+    tilesContainer.style.display = isListView ? 'flex' : 'grid';
+  }
+  if (sectionHeader) sectionHeader.style.display = 'flex';
+  if (dashboardHeader && path.length === 0) dashboardHeader.style.display = 'flex';
+}
+
+function downloadCurrentImage() {
+  if (!_currentImageBlobUrl) return;
+  const a = document.createElement('a');
+  a.href = _currentImageBlobUrl;
+  a.download = _currentImageName || 'whiteboard.png';
+  a.click();
+}
+
+window.showImage = showImage;
+window.closeImageViewer = closeImageViewer;
+window.downloadCurrentImage = downloadCurrentImage;
+window.showPDF = showPDF;
+
+// Expose closePDF globally
+window.closePDF = closePDF;
 
 function renderAnalytics() {
   console.log('renderAnalytics called');
@@ -841,12 +1306,22 @@ function renderFlashcardDecks() {
     <div class="deck-card">
       <h4>${escapeHtml(deck.name)}</h4>
       <p>${deck.cards.length} cards</p>
-      <button class="btn-icon delete" onclick="event.stopPropagation(); deleteDeck('${deck.id}')" title="Delete deck">
-        <i class="fas fa-trash"></i>
-      </button>
-      <button class="btn btn-primary btn-sm" onclick="startStudyDeck('${deck.id}')" style="margin-top: 1rem;">
-        <i class="fas fa-play"></i> Study
-      </button>
+      <div class="deck-actions">
+        <button class="btn-icon tag" onclick="event.stopPropagation(); openTagItemModal('deck_${deck.id}', '${escapeHtml(deck.name)}', 'flashcard')" title="Add Tags">
+          <i class="fas fa-tag"></i>
+        </button>
+        <button class="btn-icon delete" onclick="event.stopPropagation(); deleteDeck('${deck.id}')" title="Delete deck">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
+      <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+        <button class="btn btn-primary btn-sm" onclick="startStudyDeck('${deck.id}')" style="flex: 1;">
+          <i class="fas fa-play"></i> Study
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="startQuiz && startQuiz('${deck.id}')" style="flex: 1;">
+          <i class="fas fa-question-circle"></i> Quiz
+        </button>
+      </div>
     </div>
   `).join('');
 }
@@ -864,16 +1339,217 @@ function renderNotes() {
       <h4>${escapeHtml(note.title)}</h4>
       <p>${escapeHtml(note.content.substring(0, 100))}${note.content.length > 100 ? '...' : ''}</p>
       <small>${new Date(note.updatedAt).toLocaleDateString()}</small>
-      <button class="btn-icon delete" onclick="event.stopPropagation(); deleteNote('${note.id}')" title="Delete note">
-        <i class="fas fa-trash"></i>
-      </button>
+      <div class="note-actions">
+        <button class="btn-icon tag" onclick="event.stopPropagation(); openTagItemModal('note_${note.id}', '${escapeHtml(note.title)}', 'note')" title="Add Tags">
+          <i class="fas fa-tag"></i>
+        </button>
+        <button class="btn-icon delete" onclick="event.stopPropagation(); deleteNote('${note.id}')" title="Delete note">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
     </div>
   `).join('');
 }
 function updateProgressDisplay() { console.log('updateProgressDisplay called'); }
-function renderQuickLinks() { console.log('renderQuickLinks called'); }
+
+function renderQuickLinks() {
+  const container = document.getElementById('quickLinksList');
+  if (!container) return;
+  
+    quickLinks = quickLinks.filter(ql => ql && ql.pathArray && Array.isArray(ql.pathArray));
+  
+  if (quickLinks.length === 0) {
+    container.innerHTML = `
+      <div class="quick-links-empty">
+        <i class="fas fa-link"></i>
+        <p>No quick links yet</p>
+        <span>Navigate to a folder or file and click "Add Current Location"</span>
+      </div>
+    `;
+    return;
+  }
+  
+  container.innerHTML = quickLinks.map(ql => {
+    const isFile = ql.isFile || false;
+    const icon = isFile ? 'fa-file-pdf' : 'fa-folder';
+    const iconColor = isFile ? 'style="color: #ef4444;"' : '';
+    return `
+    <div class="quick-link-item" data-id="${ql.id}" data-path="${ql.pathArray.join('|')}" data-is-file="${isFile}" data-url="${ql.url || ''}">
+      <i class="fas ${icon}" ${iconColor}></i>
+      <span class="quick-link-name">${ql.name || ql.pathArray[ql.pathArray.length - 1] || 'Unknown'}</span>
+      <button class="quick-link-delete" title="Remove" onclick="event.stopPropagation(); removeQuickLink('${ql.id}')">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  `;
+  }).join('');
+  
+    container.querySelectorAll('.quick-link-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.quick-link-delete')) return;
+      const pathStr = item.dataset.path;
+      const pathArray = pathStr.split('|');
+      const isFile = item.dataset.isFile === 'true';
+      const url = item.dataset.url;
+      
+      if (isFile && url) {
+                const parentPath = pathArray.slice(0, -1);
+        navigateToPath(parentPath);
+        setTimeout(() => showPDF(url), 100);
+      } else {
+        navigateToPath(pathArray);
+      }
+      document.getElementById('quickLinksPanel')?.classList.remove('active');
+    });
+  });
+}
+
+let currentOpenPDF = null;
+window.setCurrentPDF = function(url, name) {
+  currentOpenPDF = { url, name };
+};
+window.clearCurrentPDF = function() {
+  currentOpenPDF = null;
+};
+
+function removeQuickLink(id) {
+  quickLinks = quickLinks.filter(ql => ql.id !== id);
+  saveQuickLinks();
+  renderQuickLinks();
+  if (typeof showNotification === 'function') showNotification('Quick link removed', 'info');
+}
+
 function saveQuickLinks() { localStorage.setItem('questionary-quick-links', JSON.stringify(quickLinks)); }
 function loadQuickLinks() { quickLinks = JSON.parse(localStorage.getItem('questionary-quick-links') || '[]'); }
+
+
+function addFolderToQuickLinks(folderName, folderPath) {
+  const pathStr = folderPath.join('|');
+  
+  
+  if (quickLinks.some(ql => ql.pathArray.join('|') === pathStr)) {
+    if (typeof showNotification === 'function') showNotification('This folder is already in quick links', 'info');
+    return;
+  }
+  
+  quickLinks.push({ 
+    id: Date.now().toString(), 
+    name: folderName, 
+    pathArray: [...folderPath],
+    isFile: false
+  });
+  
+  saveQuickLinks();
+  renderQuickLinks();
+  if (typeof showNotification === 'function') showNotification(`Folder "${folderName}" added to quick links!`, 'success');
+}
+
+
+window.addFolderToQuickLinks = addFolderToQuickLinks;
+
+
+function addCurrentFolderToQuickLinks() {
+  if (path.length === 0) {
+    if (typeof showNotification === 'function') showNotification('Navigate to a folder first to add it as a quick link', 'info');
+    return;
+  }
+  
+  const pathStr = path.join('|');
+  if (quickLinks.some(ql => ql.pathArray.join('|') === pathStr)) {
+    if (typeof showNotification === 'function') showNotification('This folder is already in quick links', 'info');
+    return;
+  }
+  
+  const folderName = path[path.length - 1];
+  quickLinks.push({ 
+    id: Date.now().toString(), 
+    name: folderName, 
+    pathArray: [...path],
+    isFile: false
+  });
+  saveQuickLinks();
+  renderQuickLinks();
+  if (typeof showNotification === 'function') showNotification(`Folder "${folderName}" added to quick links!`, 'success');
+}
+
+
+function addCurrentPdfToQuickLinks() {
+  if (!currentOpenPDF) return;
+  
+  const pathStr = [...path, currentOpenPDF.name].join('|');
+  if (quickLinks.some(ql => ql.pathArray.join('|') === pathStr)) {
+    if (typeof showNotification === 'function') showNotification('This file is already in quick links', 'info');
+    return;
+  }
+  
+  quickLinks.push({ 
+    id: Date.now().toString(), 
+    name: currentOpenPDF.name, 
+    pathArray: [...path, currentOpenPDF.name],
+    isFile: true,
+    url: currentOpenPDF.url
+  });
+  saveQuickLinks();
+  renderQuickLinks();
+  if (typeof showNotification === 'function') showNotification('PDF added to quick links!', 'success');
+}
+
+
+function showQuickLinkChoiceDialog() {
+  
+  const existing = document.getElementById('quickLinkChoiceDialog');
+  if (existing) existing.remove();
+  
+  const folderName = path.length > 0 ? path[path.length - 1] : 'Home';
+  const pdfName = currentOpenPDF ? currentOpenPDF.name : '';
+  
+  const dialog = document.createElement('div');
+  dialog.id = 'quickLinkChoiceDialog';
+  dialog.className = 'quicklink-choice-dialog-overlay';
+  dialog.innerHTML = `
+    <div class="quicklink-choice-dialog">
+      <h3><i class="fas fa-link"></i> Add Quick Link</h3>
+      <p>What would you like to add?</p>
+      <div class="quicklink-choice-options">
+        <button class="quicklink-choice-btn" id="addPdfQuickLink">
+          <i class="fas fa-file-pdf"></i>
+          <span>Current PDF</span>
+          <small>${pdfName}</small>
+        </button>
+        ${path.length > 0 ? `
+        <button class="quicklink-choice-btn" id="addFolderQuickLink">
+          <i class="fas fa-folder"></i>
+          <span>Current Folder</span>
+          <small>${folderName}</small>
+        </button>
+        ` : ''}
+      </div>
+      <button class="quicklink-choice-cancel" id="cancelQuickLinkChoice">Cancel</button>
+    </div>
+  `;
+  
+  document.body.appendChild(dialog);
+  
+  
+  document.getElementById('addPdfQuickLink').onclick = () => {
+    addCurrentPdfToQuickLinks();
+    dialog.remove();
+  };
+  
+  const folderBtn = document.getElementById('addFolderQuickLink');
+  if (folderBtn) {
+    folderBtn.onclick = () => {
+      addCurrentFolderToQuickLinks();
+      dialog.remove();
+    };
+  }
+  
+  document.getElementById('cancelQuickLinkChoice').onclick = () => dialog.remove();
+  dialog.onclick = (e) => {
+    if (e.target === dialog) dialog.remove();
+  };
+}
+
 function trackStudyTime(minutes) { 
   console.log('Tracked study time:', minutes);
   studyStats.totalTime = (studyStats.totalTime || 0) + minutes;
@@ -911,7 +1587,7 @@ function renderAccessChart(accessData) {
     });
   }
   
-  const maxCount = Math.max(...days.map(d => d.count), 1);
+  const maxCount = Math.max(...days.map(d => d.count), 5);
   
   container.innerHTML = `
     <div style="display: flex; align-items: flex-end; justify-content: space-between; height: 140px; gap: 8px; padding: 10px 0;">
@@ -1070,8 +1746,2210 @@ window.navigateToNote = navigateToNote;
 window.navigateToFlashcard = navigateToFlashcard;
 window.navigateToSession = navigateToSession;
 
+// IMPORTANT: Populate documents data and expose to window
+documents = {
+    "2020-21": {
+        "Class 9": {
+            "MT 1": {
+                "Bengali": "documents/2020-21_CL_9_MT_1_Bengali_I.pdf",
+                "Biology": "documents/2020-21_CL_9_MT_1_Biology_I.pdf",
+                "Chemistry": "documents/2020-21_CL_9_MT_1_Chemistry.pdf",
+                "Commerce": "documents/2020-21_CL_9_MT_1_Commerce_I.pdf",
+                "Computer": "documents/2020-21_CL_9_MT_1_Computer.pdf",
+                "Economics": "documents/2020-21_CL_9_MT_1_Economics.pdf",
+                "English Language": "documents/2020-21_CL_9_MT_1_English_Language.pdf",
+                "English Literature": "documents/2020-21_CL_9_MT_1_English_Literature.pdf",
+                "EVA": "documents/2020-21_CL_9_MT_1_EVA.pdf",
+                "EVS": "documents/2020-21_CL_9_MT_1_EVS.pdf",
+                "French": "documents/2020-21_CL_9_MT_1_French_I.pdf",
+                "Geography": "documents/2020-21_CL_9_MT_1_Geography.pdf",
+                "German": "documents/2020-21_CL_9_MT_1_German_I.pdf",
+                "Hindi": "documents/2020-21_CL_9_MT_1_Hindi.pdf",
+                "History": "documents/2020-21_CL_9_MT_1_History.pdf",
+                "Home Science": "documents/2020-21_CL_9_MT_1_Home_Science.pdf",
+                "Math": "documents/2020-21_CL_9_MT_1_Math.pdf",
+                "PE": "documents/2020-21_CL_9_MT_1_PE.pdf",
+                "Physics": "documents/2020-21_CL_9_MT_1_Physics.pdf",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "documents/2020-21_CL_9_MT_2_Bengali.pdf",
+                "Biology": "documents/2020-21_CL_9_MT_2_Biology.pdf",
+                "Chemistry": "documents/2020-21_CL_9_MT_2_Chemistry.pdf",
+                "Commerce": "documents/2020-21_CL_9_MT_2_Commerce.pdf",
+                "Computer": "documents/2020-21_CL_9_MT_2_Computer.pdf",
+                "Economics": "documents/2020-21_CL_9_MT_2_Economics.pdf",
+                "English Language": "documents/2020-21_CL_9_MT_2_English_Language.pdf",
+                "English Literature": "documents/2020-21_CL_9_MT_2_English_Literature.pdf",
+                "EVA": "documents/2020-21_CL_9_MT_2_EVA.pdf",
+                "EVS": "documents/2020-21_CL_9_MT_2_EVS.pdf",
+                "French": "documents/2020-21_CL_9_MT_2_French.pdf",
+                "Geography": "documents/2020-21_CL_9_MT_2_Geography.pdf",
+                "German": "documents/2020-21_CL_9_MT_2_German.pdf",
+                "Hindi": "#",
+                "History": "documents/2020-21_CL_9_MT_2_History.pdf",
+                "Home Science": "documents/2020-21_CL_9_MT_2_Home_Science.pdf",
+                "Math": "documents/2020-21_CL_9_MT_2_Math.pdf",
+                "PE": "documents/2020-21_CL_9_MT_2_PE.pdf",
+                "Physics": "documents/2020-21_CL_9_MT_2_Physics.pdf",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "documents/2020-21_CL_9_HY_Bengali_I.pdf",
+                "Biology": "documents/2020-21_CL_9_HY_Biology.pdf",
+                "Chemistry": "documents/2020-21_CL_9_HY_Chemistry.pdf",
+                "Commerce": "documents/2020-21_CL_9_HY_Commerce_I.pdf",
+                "Computer": "documents/2020-21_CL_9_HY_Computer.pdf",
+                "Economics": "#",
+                "English Language": "documents/2020-21_CL_9_HY_English_Language.pdf",
+                "English Literature": "documents/2020-21_CL_9_HY_English_Literature_I.pdf",
+                "EVA": "documents/2020-21_CL_9_HY_EVA.pdf",
+                "EVS": "documents/2020-21_CL_9_HY_EVS.pdf",
+                "French": "documents/2020-21_CL_9_HY_French.pdf",
+                "Geography": "documents/2020-21_CL_9_HY_Geography.pdf",
+                "German": "documents/2020-21_CL_9_HY_German.pdf",
+                "Hindi": "documents/2020-21_CL_9_HY_Hindi.pdf",
+                "History": "documents/2020-21_CL_9_HY_History.pdf",
+                "Home Science": "documents/2020-21_CL_9_HY_Home_Science.pdf",
+                "Math": "documents/2020-21_CL_9_HY_Math.pdf",
+                "PE": "documents/2020-21_CL_9_HY_PE.pdf",
+                "Physics": "documents/2020-21_CL_9_HY_Physics.pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "documents/2020-21_CL_9_FT_Bengali.pdf",
+                "Biology": "documents/2020-21_CL_9_FT_Biology.pdf",
+                "Chemistry": "documents/2020-21_CL_9_FT_Chemistry.pdf",
+                "Commerce": "documents/2020-21_CL_9_FT_Commerce.pdf",
+                "Computer": "documents/2020-21_CL_9_FT_Computer.pdf",
+                "Economics": "documents/2020-21_CL_9_FT_Economics.pdf",
+                "English Language": "documents/2020-21_CL_9_FT_English_Language_I.pdf",
+                "English Literature": "documents/2020-21_CL_9_FT_English_Literature_I.pdf",
+                "EVA": "documents/2020-21_CL_9_FT_EVA.pdf",
+                "EVS": "documents/2020-21_CL_9_FT_EVS.pdf",
+                "French": "documents/2020-21_CL_9_FT_French_.pdf",
+                "Geography": "documents/2020-21_CL_9_FT_Geography.pdf",
+                "German": "documents/2020-21_CL_9_FT_German.pdf",
+                "Hindi": "documents/2020-21_CL_9_FT_Hindi.pdf",
+                "History": "documents/2020-21_CL_9_FT_History_I.pdf",
+                "Home Science": "documents/2020-21_CL_9_FT_Home_Science.pdf",
+                "Math": "documents/2020-21_CL_9_FT_Math.pdf",
+                "PE": "documents/2020-21_CL_9_FT_PE.pdf",
+                "Physics": "documents/2020-21_CL_9_FT_Physics_I.pdf",
+                "RAI": "#"
+            }
+        },
+        "Class 10": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 11": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 12": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        }
+    },
+    "2021-22": {
+        "Class 9": {
+            "MT 1": {
+                "Bengali": "documents/2021-22_CL_9_MT_1_Bengali.pdf",
+                "Biology": "documents/2021-22_CL_9_MT_1_Biology.pdf",
+                "Chemistry": "documents/2021-22_CL_9_MT_1_Chemistry.pdf",
+                "Commerce": "documents/2021-22_CL_9_MT_1_Commerce.pdf",
+                "Computer": "documents/2021-22_CL_9_MT_1_Computer.pdf",
+                "Economics": "documents/2021-22_CL_9_MT_1_Economics.pdf",
+                "English Language": "documents/2021-22_CL_9_MT_1_English_Language.pdf",
+                "English Literature": "documents/2021-22_CL_9_MT_1_English_Literature.pdf",
+                "EVA": "documents/2021-22_CL_9_MT_1_EVA.pdf",
+                "EVS": "documents/2021-22_CL_9_MT_1_EVS.pdf",
+                "French": "documents/2021-22_CL_9_MT_1_French.pdf",
+                "Geography": "documents/2021-22_CL_9_MT_1_Geography.pdf",
+                "German": "documents/2021-22_CL_9_MT_1_German.pdf",
+                "Hindi": "documents/2021-22_CL_9_MT_1_Hindi.pdf",
+                "History": "documents/2021-22_CL_9_MT_1_History.pdf",
+                "Home Science": "documents/2021-22_CL_9_MT_1_Home_Science.pdf",
+                "Math": "documents/2021-22_CL_9_MT_1_Math.pdf",
+                "PE": "documents/2021-22_CL_9_MT_1_PE.pdf",
+                "Physics": "documents/2021-22_CL_9_MT_1_Physics.pdf",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "documents/2021-22_CL_9_MT_2_Bengali.pdf",
+                "Biology": "documents/2021-22_CL_9_MT_2_Biology.pdf",
+                "Chemistry": "documents/2021-22_CL_9_MT_2_Chemistry.pdf",
+                "Commerce": "documents/2021-22_CL_9_MT_2_Commerce.pdf",
+                "Computer": "documents/2021-22_CL_9_MT_2_Computer.pdf",
+                "Economics": "documents/2021-22_CL_9_MT_2_Economics.pdf",
+                "English Language": "documents/2021-22_CL_9_MT_2_English_Language.pdf",
+                "English Literature": "documents/2021-22_CL_9_MT_2_English_Literature.pdf",
+                "EVA": "documents/2021-22_CL_9_MT_2_EVA.pdf",
+                "EVS": "documents/2021-22_CL_9_MT_2_EVS.pdf",
+                "French": "documents/2021-22_CL_9_MT_2_French.pdf",
+                "Geography": "documents/2021-22_CL_9_MT_2_Geography.pdf",
+                "German": "documents/2021-22_CL_9_MT_2_German.pdf",
+                "Hindi": "documents/2021-22_CL_9_MT_2_Hindi.pdf",
+                "History": "documents/2021-22_CL_9_MT_2_History.pdf",
+                "Home Science": "documents/2021-22_CL_9_MT_2_Home_Science.pdf",
+                "Math": "documents/2021-22_CL_9_MT_2_Math.pdf",
+                "PE": "documents/2021-22_CL_9_MT_2_PE.pdf",
+                "Physics": "documents/2021-22_CL_9_MT_2_Physics.pdf",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "documents/2021-22_CL_9_HY_Bengali_I.pdf",
+                "Biology": "documents/2021-22_CL_9_HY_Biology_I.pdf",
+                "Chemistry": "documents/2021-22_CL_9_HY_Chemistry_I.pdf",
+                "Commerce": "documents/2021-22_CL_9_HY_Commerce_I.pdf",
+                "Computer": "documents/2021-22_CL_9_HY_Computer_I.pdf",
+                "Economics": "documents/2021-22_CL_9_HY_Economics_I.pdf",
+                "English Language": "documents/2021-22_CL_9_HY_English_Language_I.pdf",
+                "English Literature": "documents/2021-22_CL_9_HY_English_Literature_II.pdf",
+                "EVA": "documents/2021-22_CL_9_HY_EVA_I.pdf",
+                "EVS": "documents/2021-22_CL_9_HY_EVS_I.pdf",
+                "French": "#",
+                "Geography": "documents/2021-22_CL_9_HY_Geography_I.pdf",
+                "German": "documents/2021-22_CL_9_HY_German_I.pdf",
+                "Hindi": "documents/2021-22_CL_9_HY_Hindi.pdf",
+                "History": "documents/2021-22_CL_9_HY_History.pdf",
+                "Home Science": "documents/2021-22_CL_9_HY_Home_Science_I.pdf",
+                "Math": "documents/2021-22_CL_9_HY_Math_I.pdf",
+                "PE": "documents/2021-22_CL_9_HY_PE_I.pdf",
+                "Physics": "documents/2021-22_CL_9_HY_Physics_I.pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "documents/2021-22_CL_9_FT_Bengali.pdf",
+                "Biology": "documents/2021-22_CL_9_FT_Biology.pdf",
+                "Chemistry": "documents/2021-22_CL_9_FT_Chemistry.pdf",
+                "Commerce": "documents/2021-22_CL_9_FT_Commerce.pdf",
+                "Computer": "documents/2021-22_CL_9_FT_Computer.pdf",
+                "Economics": "documents/2021-22_CL_9_FT_Economics.pdf",
+                "English Language": "documents/2021-22_CL_9_FT_English_Language.pdf",
+                "English Literature": "documents/2021-22_CL_9_FT_English_Literature.pdf",
+                "EVA": "documents/2021-22_CL_9_FT_EVA.pdf",
+                "EVS": "documents/2021-22_CL_9_FT_EVS.pdf",
+                "French": "documents/2021-22_CL_9_FT_French.pdf",
+                "Geography": "documents/2021-22_CL_9_FT_Geography.pdf",
+                "German": "documents/2021-22_CL_9_FT_German.pdf",
+                "Hindi": "documents/2021-22_CL_9_FT_Hindi.pdf",
+                "History": "documents/2021-22_CL_9_FT_History.pdf",
+                "Home Science": "documents/2021-22_CL_9_FT_Home_Science.pdf",
+                "Math": "documents/2021-22_CL_9_FT_Math.pdf",
+                "PE": "documents/2021-22_CL_9_FT_PE.pdf",
+                "Physics": "documents/2021-22_CL_9_FT_Physics.pdf",
+                "RAI": "#"
+            }
+        },
+        "Class 10": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 11": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 12": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        }
+    },
+    "2022-23": {
+        "Class 9": {
+            "MT 1": {
+                "Bengali": "documents/2022-23_CL_9_MT_1_Bengali.pdf",
+                "Biology": "documents/2022-23_CL_9_MT_1_Biology.pdf",
+                "Chemistry": "documents/2022-23_CL_9_MT_1_Chemistry.pdf",
+                "Commerce": "documents/2022-23_CL_9_MT_1_Commerce.pdf",
+                "Computer": "documents/2022-23_CL_9_MT_1_Computer.pdf",
+                "Economics": "documents/2022-23_CL_9_MT_1_Economics.pdf",
+                "English Language": "documents/2022-23_CL_9_MT_1_English_Language.pdf",
+                "English Literature": "documents/2022-23_CL_9_MT_1_English_Literature.pdf",
+                "EVA": "documents/2022-23_CL_9_MT_1_EVA.pdf",
+                "EVS": "documents/2022-23_CL_9_MT_1_EVS.pdf",
+                "French": "documents/2022-23_CL_9_MT_1_French.pdf",
+                "Geography": "documents/2022-23_CL_9_MT_1_Geography.pdf",
+                "German": "documents/2022-23_CL_9_MT_1_German.pdf",
+                "Hindi": "documents/2022-23_CL_9_MT_1_Hindi.pdf",
+                "History": "documents/2022-23_CL_9_MT_1_History.pdf",
+                "Home Science": "documents/2022-23_CL_9_MT_1_Home_Science.pdf",
+                "Math": "documents/2022-23_CL_9_MT_1_Math.pdf",
+                "PE": "documents/2022-23_CL_9_MT_1_PE.pdf",
+                "Physics": "documents/2022-23_CL_9_MT_1_Physics.pdf",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "documents/2022-23_CL_9_MT2_Bengali.pdf",
+                "Biology": "documents/2022-23_CL_9_MT2_Biology.pdf",
+                "Chemistry": "documents/2022-23_CL_9_MT2_Chemistry.pdf",
+                "Commerce": "documents/2022-23_CL_9_MT2_Commerce.pdf",
+                "Computer": "documents/2022-23_CL_9_MT2_Computer.pdf",
+                "Economics": "documents/2022-23_CL_9_MT2_Economics.pdf",
+                "English Language": "documents/2022-23_CL_9_MT2_EnglishLanguage.pdf",
+                "English Literature": "documents/2022-23_CL_9_MT2_EnglishLiterature.pdf",
+                "EVA": "documents/2022-23_CL_9_MT2_EVA.pdf",
+                "EVS": "documents/2022-23_CL_9_MT2_EVS.pdf",
+                "French": "documents/2022-23_CL_9_MT2_French.pdf",
+                "Geography": "documents/2022-23_CL_9_MT2_Geography.pdf",
+                "German": "documents/2022-23_CL_9_MT2_German.pdf",
+                "Hindi": "documents/2022-23_CL_9_MT2_Hindi.pdf",
+                "History": "documents/2022-23_CL_9_MT2_History.pdf",
+                "Home Science": "documents/2022-23_CL_9_MT2_HomeScience.pdf",
+                "Math": "documents/2022-23_CL_9_MT2_Math.pdf",
+                "PE": "documents/2022-23_CL_9_MT2_PE.pdf",
+                "Physics": "documents/2022-23_CL_9_MT2_Physics.pdf",
+                "RAI": "#",
+                "EnglishLanguage": "documents/2022-23_CL_9_MT2_EnglishLanguage.pdf",
+                "EnglishLiterature": "documents/2022-23_CL_9_MT2_EnglishLiterature.pdf",
+                "HomeScience": "documents/2022-23_CL_9_MT2_HomeScience.pdf"
+            },
+            "HY": {
+                "Bengali": "documents/2022-23_CL_9_HY_Bengali.pdf",
+                "Biology": "documents/2022-23_CL_9_HY_Biology.pdf",
+                "Chemistry": "documents/2022-23_CL_9_HY_Chemistry.pdf",
+                "Commerce": "documents/2022-23_CL_9_HY_Commerce.pdf",
+                "Computer": "documents/2022-23_CL_9_HY_Computer.pdf",
+                "Economics": "documents/2022-23_CL_9_HY_Economics.pdf",
+                "English Language": "documents/2022-23_CL_9_HY_English_Language.pdf",
+                "English Literature": "documents/2022-23_CL_9_HY_English_Literature.pdf",
+                "EVA": "documents/2022-23_CL_9_HY_EVA.pdf",
+                "EVS": "documents/2022-23_CL_9_HY_EVS.pdf",
+                "French": "documents/2022-23_CL_9_HY_French.pdf",
+                "Geography": "documents/2022-23_CL_9_HY_Geography.pdf",
+                "German": "documents/2022-23_CL_9_HY_German.pdf",
+                "Hindi": "documents/2022-23_CL_9_HY_Hindi.pdf",
+                "History": "documents/2022-23_CL_9_HY_History.pdf",
+                "Home Science": "documents/2022-23_CL_9_HY_Home_Science.pdf",
+                "Math": "documents/2022-23_CL_9_HY_Math.pdf",
+                "PE": "documents/2022-23_CL_9_HY_PE.pdf",
+                "Physics": "documents/2022-23_CL_9_HY_Physics.pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "documents/2022-23_CL_9_FT_Bengali.pdf",
+                "Biology": "documents/2022-23_CL_9_FT_Biology.pdf",
+                "Chemistry": "documents/2022-23_CL_9_FT_Chemistry.pdf",
+                "Commerce": "documents/2022-23_CL_9_FT_Commerce.pdf",
+                "Computer": "documents/2022-23_CL_9_FT_Computer.pdf",
+                "Economics": "documents/2022-23_CL_9_FT_Economics.pdf",
+                "English Language": "documents/2022-23_CL_9_FT_English_Language.pdf",
+                "English Literature": "documents/2022-23_CL_9_FT_English_Literature.pdf",
+                "EVA": "documents/2022-23_CL_9_FT_EVA.pdf",
+                "EVS": "documents/2022-23_CL_9_FT_EVS.pdf",
+                "French": "documents/2022-23_CL_9_FT_French.pdf",
+                "Geography": "documents/2022-23_CL_9_FT_Geography.pdf",
+                "German": "documents/2022-23_CL_9_FT_German.pdf",
+                "Hindi": "documents/2022-23_CL_9_FT_Hindi.pdf",
+                "History": "documents/2022-23_CL_9_FT_History.pdf",
+                "Home Science": "documents/2022-23_CL_9_FT_Home_Science.pdf",
+                "Math": "documents/2022-23_CL_9_FT_Math.pdf",
+                "PE": "documents/2022-23_CL_9_FT_PE.pdf",
+                "Physics": "documents/2022-23_CL_9_FT_Physics.pdf",
+                "RAI": "#"
+            }
+        },
+"Class 10": {
+            "MT 1": {
+                "Bengali": "documents/2022-23_CL_10_MT_1_MT 1_BENGALI.pdf",
+                "Biology": "documents/2022-23_CL_10_MT_1_MT 1_BIOLOGY.pdf",
+                "Chemistry": "documents/2022-23_CL_10_MT_1_MT 1_CHEMISTRY.pdf",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "documents/2022-23_CL_10_MT_1_LANGUAGE.pdf",
+                "English Literature": "documents/2022-23_CL_10_MT_1_LITERATURE.pdf",
+                "EVA": "documents/2022-23_CL_10_MT_1_MT 1_EVA.pdf",
+                "EVS": "#",
+                "French": "documents/2022-23_CL_10_MT_1_MT 1_FRENCH (L2).pdf",
+                "Geography": "#",
+                "German": "documents/2022-23_CL_10_MT_1_MT 1_GERMAN (L2).pdf",
+                "Hindi": "documents/2022-23_CL_10_MT_1_MT 1_HINDI.pdf",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "documents/2022-23_CL_10_MT_1_MT 1_MATHS.pdf",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "documents/2022-23_CL_10_MT_2_MT 2_BENGALI.pdf",
+                "Biology": "documents/2022-23_CL_10_MT_2_MT 2_BIOLOGY.pdf",
+                "Chemistry": "documents/2022-23_CL_10_MT_2_MT 2_CHEMISTRY.pdf",
+                "Commerce": "#",
+                "Computer": "documents/2022-23_CL_10_MT_2_MT 2_COMPUTER APPLICATIONS.pdf",
+                "Economics": "#",
+                "English Language": "documents/2022-23_CL_10_MT_2_LANGUAGE.pdf",
+                "English Literature": "documents/2022-23_CL_10_MT_2_LITERATURE.pdf",
+                "EVA": "documents/2022-23_CL_10_MT_2_MT 2_EVA.pdf",
+                "EVS": "#",
+                "French": "documents/2022-23_CL_10_MT_2_MT 2_FRENCH (L2).pdf",
+                "Geography": "documents/2022-23_CL_10_MT_2_MT 2_GEOGRAPHY.pdf",
+                "German": "documents/2022-23_CL_10_MT_2_MT 2_GERMAN (L2).pdf",
+                "Hindi": "documents/2022-23_CL_10_MT_2_MT 2_HINDI.pdf",
+                "History": "documents/2022-23_CL_10_MT_2_MT 2_HISTORY _ CIVICS.pdf",
+                "Home Science": "documents/2022-23_CL_10_MT_2_MT 2_HOME SCIENCE.pdf",
+                "Math": "documents/2022-23_CL_10_MT_2_MT 2_MATHS.pdf",
+                "PE": "#",
+                "Physics": "documents/2022-23_CL_10_MT_2_MT 2_PHYSICS.pdf",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "documents/2022-23_CL_10_HY_HY EXAM_BENGALI (SET-A).pdf",
+                "Biology": "documents/2022-23_CL_10_HY_HY EXAM_BIOLOGY (SET-A).pdf",
+                "Chemistry": "documents/2022-23_CL_10_HY_HY EXAM_CHEMISTRY (SET-A).pdf",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "documents/2022-23_CL_10_HY_LANGUAGE.pdf",
+                "English Literature": "documents/2022-23_CL_10_HY_LITERATURE.pdf",
+                "EVA": "documents/2022-23_CL_10_HY_HY EXAM_EVA (SET-B).pdf",
+                "EVS": "documents/2022-23_CL_10_HY_HY EXAM_EVS.pdf",
+                "French": "documents/2022-23_CL_10_HY_HY EXAM_FRENCH (L2).pdf",
+                "Geography": "documents/2022-23_CL_10_HY_HY EXAM_GEOGRAPHY (SET-A).pdf",
+                "German": "#",
+                "Hindi": "documents/2022-23_CL_10_HY_HY EXAM_HINDI (SET-A).pdf",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "documents/2022-23_CL_10_HY_HY EXAM_MATHS (SET-B).pdf",
+                "PE": "documents/2022-23_CL_10_HY_CL.10_HY EXAM PE.pdf",
+                "Physics": "documents/2022-23_CL_10_HY_HY EXAM_PHYSICS (SET-B).pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_BENGALI (SET-A).pdf",
+                "Biology": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_BIOLOGY (SET-A).pdf",
+                "Chemistry": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_CHEMISTRY (SET-A).pdf",
+                "Commerce": "#",
+                "Computer": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_COMPUTER APPLICATIONS (SET-A).pdf",
+                "Economics": "#",
+                "English Language": "documents/2022-23_CL_10_PREBOARD_LANGUAGE.pdf",
+                "English Literature": "documents/2022-23_CL_10_PREBOARD_LITERATURE.pdf",
+                "EVA": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_EVA (SET-A).pdf",
+                "EVS": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_EVS.pdf",
+                "French": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_FRENCH (L2).pdf",
+                "Geography": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_GEOGRAPHY (SET-A).pdf",
+                "German": "#",
+                "Hindi": "#",
+                "History": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_HISTORY _ CIVICS (SET-A).pdf",
+                "Home Science": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_HOME SCIENCE (SET-A).pdf",
+                "Math": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_MATHS (SET-A).pdf",
+                "PE": "#",
+                "Physics": "documents/2022-23_CL_10_PREBOARD_PRE BOARD_PHYSICS (SET-A).pdf",
+                "RAI": "#"
+            }
+        },
+    
+        "Class 11": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 12": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        }
+    },
+    "2023-24": {
+        "Class 9": {
+            "MT 1": {
+                "Bengali": "documents/2023-24_CL_9_MT_1_Bengali.pdf",
+                "Biology": "documents/2023-24_CL_9_MT_1_Biology.pdf",
+                "Chemistry": "documents/2023-24_CL_9_MT_1_Chemistry.pdf",
+                "Commerce": "documents/2023-24_CL_9_MT_1_Commerce.pdf",
+                "Computer": "documents/2023-24_CL_9_MT_1_Computer.pdf",
+                "Economics": "documents/2023-24_CL_9_MT_1_Economics.pdf",
+                "English Language": "documents/2023-24_CL_9_MT_1_English_Language.pdf",
+                "English Literature": "documents/2023-24_CL_9_MT_1_English_Literature.pdf",
+                "EVA": "documents/2023-24_CL_9_MT_1_EVA.pdf",
+                "EVS": "documents/2023-24_CL_9_MT_1_EVS.pdf",
+                "French": "documents/2023-24_CL_9_MT_1_French.pdf",
+                "Geography": "documents/2023-24_CL_9_MT_1_Geography.pdf",
+                "German": "documents/2023-24_CL_9_MT_1_German.pdf",
+                "Hindi": "documents/2023-24_CL_9_MT_1_Hindi.pdf",
+                "History": "documents/2023-24_CL_9_MT_1_History.pdf",
+                "Home Science": "documents/2023-24_CL_9_MT_1_Home_Science.pdf",
+                "Math": "documents/2023-24_CL_9_MT_1_Math.pdf",
+                "PE": "documents/2023-24_CL_9_MT_1_PE.pdf",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "documents/2023-24_CL_9_MT_2_Bengali.pdf",
+                "Biology": "documents/2023-24_CL_9_MT_2_Biology.pdf",
+                "Chemistry": "documents/2023-24_CL_9_MT_2_Chemistry.pdf",
+                "Commerce": "documents/2023-24_CL_9_MT_2_Commerce.pdf",
+                "Computer": "documents/2023-24_CL_9_MT_2_Computer.pdf",
+                "Economics": "documents/2023-24_CL_9_MT_2_Economics.pdf",
+                "English Language": "documents/2023-24_CL_9_MT_2_English_Language.pdf",
+                "English Literature": "documents/2023-24_CL_9_MT_2_English_Literature.pdf",
+                "EVA": "documents/2023-24_CL_9_MT_2_EVA.pdf",
+                "EVS": "documents/2023-24_CL_9_MT_2_EVS.pdf",
+                "French": "documents/2023-24_CL_9_MT_2_French.pdf",
+                "Geography": "documents/2023-24_CL_9_MT_2_Geography.pdf",
+                "German": "documents/2023-24_CL_9_MT_2_German.pdf",
+                "Hindi": "documents/2023-24_CL_9_MT_2_Hindi.pdf",
+                "History": "documents/2023-24_CL_9_MT_2_History.pdf",
+                "Home Science": "documents/2023-24_CL_9_MT_2_Home_Science.pdf",
+                "Math": "documents/2023-24_CL_9_MT_2_Math.pdf",
+                "PE": "documents/2023-24_CL_9_MT_2_PE.pdf",
+                "Physics": "documents/2023-24_CL_9_MT_2_Physics.pdf",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "documents/2023-24_CL_9_HY_Bengali.pdf",
+                "Biology": "documents/2023-24_CL_9_HY_Biology.pdf",
+                "Chemistry": "documents/2023-24_CL_9_HY_Chemistry.pdf",
+                "Commerce": "documents/2023-24_CL_9_HY_Commerce.pdf",
+                "Computer": "documents/2023-24_CL_9_HY_Computer.pdf",
+                "Economics": "documents/2023-24_CL_9_HY_Economics.pdf",
+                "English Language": "documents/2023-24_CL_9_HY_English_Language.pdf",
+                "English Literature": "documents/2023-24_CL_9_HY_English_Literature.pdf",
+                "EVA": "documents/2023-24_CL_9_HY_EVA.pdf",
+                "EVS": "documents/2023-24_CL_9_HY_EVS.pdf",
+                "French": "documents/2023-24_CL_9_HY_French.pdf",
+                "Geography": "documents/2023-24_CL_9_HY_Geography.pdf",
+                "German": "documents/2023-24_CL_9_HY_German.pdf",
+                "Hindi": "documents/2023-24_CL_9_HY_Hindi.pdf",
+                "History": "documents/2023-24_CL_9_HY_History.pdf",
+                "Home Science": "documents/2023-24_CL_9_HY_Home_Science.pdf",
+                "Math": "documents/2023-24_CL_9_HY_Math.pdf",
+                "PE": "documents/2023-24_CL_9_HY_PE.pdf",
+                "Physics": "documents/2023-24_CL_9_HY_Physics.pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "documents/2023-24_CL_9_FT_Bengali.pdf",
+                "Biology": "documents/2023-24_CL_9_FT_Biology.pdf",
+                "Chemistry": "documents/2023-24_CL_9_FT_Chemistry.pdf",
+                "Commerce": "documents/2023-24_CL_9_FT_Commerce.pdf",
+                "Computer": "documents/2023-24_CL_9_FT_Computer.pdf",
+                "Economics": "documents/2023-24_CL_9_FT_Economics.pdf",
+                "English Language": "documents/2023-24_CL_9_FT_English_Language.pdf",
+                "English Literature": "documents/2023-24_CL_9_FT_English_Literature.pdf",
+                "EVA": "documents/2023-24_CL_9_FT_EVA.pdf",
+                "EVS": "documents/2023-24_CL_9_FT_EVS.pdf",
+                "French": "documents/2023-24_CL_9_FT_French.pdf",
+                "Geography": "documents/2023-24_CL_9_FT_Geography.pdf",
+                "German": "documents/2023-24_CL_9_FT_German.pdf",
+                "Hindi": "documents/2023-24_CL_9_FT_Hindi.pdf",
+                "History": "documents/2023-24_CL_9_FT_History.pdf",
+                "Home Science": "documents/2023-24_CL_9_FT_Home_Science.pdf",
+                "Math": "documents/2023-24_CL_9_FT_Math.pdf",
+                "PE": "documents/2023-24_CL_9_FT_PE.pdf",
+                "Physics": "documents/2023-24_CL_9_FT_Physics.pdf",
+                "RAI": "documents/2023-24_CL_9_FT_RAI.pdf"
+            }
+        },
+        "Class 10": {
+            "MT 1": {
+                "Bengali": "documents/2023-24_CL_10_MT_1_BENGALI.pdf",
+                "Biology": "documents/2023-24_CL_10_MT_1_BIOLOGY.pdf",
+                "Chemistry": "documents/2023-24_CL_10_MT_1_CHEMISTRY.pdf",
+                "Commerce": "documents/2023-24_CL_10_MT_1_COMMERCIAL STUDIES.pdf",
+                "Computer": "documents/2023-24_CL_10_MT_1_COMPUTER APPLICATIONS.pdf",
+                "Economics": "documents/2023-24_CL_10_MT_1_ECONOMIC APPLICATIONS.pdf",
+                "English Language": "documents/2023-24_CL_10_MT_1_LANGUAGE.pdf",
+                "English Literature": "documents/2023-24_CL_10_MT_1_LITERATURE.pdf",
+                "EVA": "documents/2023-24_CL_10_MT_1_EVA.pdf",
+                "EVS": "documents/2023-24_CL_10_MT_1_EVS.pdf",
+                "French": "documents/2023-24_CL_10_MT_1_FRENCH (L2).pdf",
+                "Geography": "documents/2023-24_CL_10_MT_1_GEOGRAPHY.pdf",
+                "German": "documents/2023-24_CL_10_MT_1_GERMAN (L2).pdf",
+                "Hindi": "documents/2023-24_CL_10_MT_1_HINDI.pdf",
+                "History": "documents/2023-24_CL_10_MT_1_HISTORY AND CIVICS.pdf",
+                "Home Science": "documents/2023-24_CL_10_MT_1_HOME SCIENCE.pdf",
+                "Math": "documents/2023-24_CL_10_MT_1_MATHS.pdf",
+                "PE": "#",
+                "Physics": "documents/2023-24_CL_10_MT_1_PHYSICS.pdf",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "documents/2023-24_CL_10_MT_2_BENGALI.pdf",
+                "Biology": "documents/2023-24_CL_10_MT_2_BIOLOGY.pdf",
+                "Chemistry": "documents/2023-24_CL_10_MT_2_CHEMISTRY.pdf",
+                "Commerce": "#",
+                "Computer": "documents/2023-24_CL_10_MT_2_M-2_COMPUTER APPLICATIONS.pdf",
+                "Economics": "documents/2023-24_CL_10_MT_2_ECONOMIC APPLICATIONS.pdf",
+                "English Language": "documents/2023-24_CL_10_MT_2_LANGUAGE.pdf",
+                "English Literature": "documents/2023-24_CL_10_MT_2_LITERATURE.pdf",
+                "EVA": "documents/2023-24_CL_10_MT_2_EVA.pdf",
+                "EVS": "documents/2023-24_CL_10_MT_2_X_EVS_MT2_2023.pdf",
+                "French": "documents/2023-24_CL_10_MT_2_M-2_FRENCH (L2).pdf",
+                "Geography": "documents/2023-24_CL_10_MT_2_GEOGRAPHY.pdf",
+                "German": "documents/2023-24_CL_10_MT_2_GERMAN (L2).pdf",
+                "Hindi": "documents/2023-24_CL_10_MT_2_M-2_HINDI.pdf",
+                "History": "documents/2023-24_CL_10_MT_2_HISTORY AND CIVICS.pdf",
+                "Home Science": "documents/2023-24_CL_10_MT_2_HOME SCIENCE.pdf",
+                "Math": "documents/2023-24_CL_10_MT_2_X_MATHS_MT-2_2023.pdf",
+                "PE": "#",
+                "Physics": "documents/2023-24_CL_10_MT_2_PHYSICS.pdf",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "documents/2023-24_CL_10_HY_HY_BENGALI (SET-A).pdf",
+                "Biology": "documents/2023-24_CL_10_HY_HY_BIOLOGY (SET-A).pdf",
+                "Chemistry": "documents/2023-24_CL_10_HY_HY_CHEMISTRY (SET-A).pdf",
+                "Commerce": "#",
+                "Computer": "documents/2023-24_CL_10_HY_HY_COMPUTER APPLICATIONS (SET-A).pdf",
+                "Economics": "#",
+                "English Language": "documents/2023-24_CL_10_HY_LANGUAGE.pdf",
+                "English Literature": "documents/2023-24_CL_10_HY_LITERATURE.pdf",
+                "EVA": "documents/2023-24_CL_10_HY_HY_EVA (SET-A).pdf",
+                "EVS": "documents/2023-24_CL_10_HY_HY_EVS.pdf",
+                "French": "documents/2023-24_CL_10_HY_HY_FRENCH (L2).pdf",
+                "Geography": "documents/2023-24_CL_10_HY_HY_GEOGRAPHY (SET-A).pdf",
+                "German": "documents/2023-24_CL_10_HY_HY_GERMAN (L2).pdf",
+                "Hindi": "documents/2023-24_CL_10_HY_HY_HINDI (SET-A).pdf",
+                "History": "documents/2023-24_CL_10_HY_HY_HISTORY AND CIVICS (SET-A).pdf",
+                "Home Science": "documents/2023-24_CL_10_HY_HY_HOME SCIENCE (SET-A).pdf",
+                "Math": "documents/2023-24_CL_10_HY_HY_MATHS (SET-A).pdf",
+                "PE": "#",
+                "Physics": "documents/2023-24_CL_10_HY_HY_PHYSICS (SET-A).pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_BENGALI (SET-A).pdf",
+                "Biology": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_BIOLOGY (SET-A).pdf",
+                "Chemistry": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_CHEMISTRY (SET-A).pdf",
+                "Commerce": "#",
+                "Computer": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_COMPUTER APPLICATIONS (SET-A).pdf",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "documents/2023-24_CL_10_PREBOARD_LITERATURE.pdf",
+                "EVA": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_EVA (SET-A).pdf",
+                "EVS": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_EVS.pdf",
+                "French": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_FRENCH (L2).pdf",
+                "Geography": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_GEOGRAPHY (SET-A).pdf",
+                "German": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_GERMAN (L2).pdf",
+                "Hindi": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_HINDI (SET-A).pdf",
+                "History": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_HISTORY AND CIVICS (SET-A).pdf",
+                "Home Science": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_HOME SCIENCE (SET-A).pdf",
+                "Math": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_MATHS (SET-A).pdf",
+                "PE": "#",
+                "Physics": "documents/2023-24_CL_10_PREBOARD_PRE BOARD_PHYSICS (SET-A).pdf",
+                "RAI": "#"
+            }
+        },
+        "Class 11": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 12": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        }
+    },
+    "2024-25": {
+        "Class 9": {
+            "MT 1": {
+                "Bengali": "documents/2024-25_CL_9_MT_1_Bengali.pdf",
+                "Biology": "documents/2024-25_CL_9_MT_1_Biology.pdf",
+                "Chemistry": "documents/2024-25_CL_9_MT_1_Chemistry.pdf",
+                "Commerce": "documents/2024-25_CL_9_MT_1_Commerce.pdf",
+                "Computer": "documents/2024-25_CL_9_MT_1_Computer.pdf",
+                "Economics": "#",
+                "English Language": "documents/2024-25_CL_9_MT_1_English_Language.pdf",
+                "English Literature": "documents/2024-25_CL_9_MT_1_English_Literature.pdf",
+                "EVA": "documents/2024-25_CL_9_MT_1_EVA.pdf",
+                "EVS": "documents/2024-25_CL_9_MT_1_EVS.pdf",
+                "French": "documents/2024-25_CL_9_MT_1_French.pdf",
+                "Geography": "documents/2024-25_CL_9_MT_1_Geography.pdf",
+                "German": "#",
+                "Hindi": "documents/2024-25_CL_9_MT_1_Hindi.pdf",
+                "History": "documents/2024-25_CL_9_MT_1_History.pdf",
+                "Home Science": "documents/2024-25_CL_9_MT_1_Home_Science.pdf",
+                "Math": "documents/2024-25_CL_9_MT_1_Math.pdf",
+                "PE": "documents/2024-25_CL_9_MT_1_PE.pdf",
+                "Physics": "documents/2024-25_CL_9_MT_1_Physics.pdf",
+                "RAI": "documents/2024-25_CL_9_MT_1_RAI.pdf"
+            },
+            "MT 2": {
+                "Bengali": "documents/2024-25_CL_9_MT_2_Bengali.pdf",
+                "Biology": "documents/2024-25_CL_9_MT_2_Biology.pdf",
+                "Chemistry": "documents/2024-25_CL_9_MT_2_Chemistry.pdf",
+                "Commerce": "documents/2024-25_CL_9_MT_2_Commerce.pdf",
+                "Computer": "documents/2024-25_CL_9_MT_2_Computer.pdf",
+                "Economics": "documents/2024-25_CL_9_MT_2_Economics.pdf",
+                "English Language": "documents/2024-25_CL_9_MT_2_English_Language.pdf",
+                "English Literature": "documents/2024-25_CL_9_MT_2_English_Literature.pdf",
+                "EVA": "documents/2024-25_CL_9_MT_2_EVA.pdf",
+                "EVS": "documents/2024-25_CL_9_MT_2_EVS.pdf",
+                "French": "documents/2024-25_CL_9_MT_2_French.pdf",
+                "Geography": "documents/2024-25_CL_9_MT_2_Geography.pdf",
+                "German": "documents/2024-25_CL_9_MT_2_German.pdf",
+                "Hindi": "documents/2024-25_CL_9_MT_2_Hindi.pdf",
+                "History": "documents/2024-25_CL_9_MT_2_History.pdf",
+                "Home Science": "documents/2024-25_CL_9_MT_2_Home_Science.pdf",
+                "Math": "documents/2024-25_CL_9_MT_2_Math.pdf",
+                "PE": "documents/2024-25_CL_9_MT_2_PE.pdf",
+                "Physics": "documents/2024-25_CL_9_MT_2_Physics.pdf",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "documents/2024-25_CL_9_HY_Biology.pdf",
+                "Chemistry": "documents/2024-25_CL_9_HY_Chemistry.pdf",
+                "Commerce": "documents/2024-25_CL_9_HY_Commerce.pdf",
+                "Computer": "documents/2024-25_CL_9_HY_Computer.pdf",
+                "Economics": "documents/2024-25_CL_9_HY_Economics.pdf",
+                "English Language": "documents/2024-25_CL_9_HY_English_Language.pdf",
+                "English Literature": "documents/2024-25_CL_9_HY_English_Literature.pdf",
+                "EVA": "documents/2024-25_CL_9_HY_EVA.pdf",
+                "EVS": "documents/2024-25_CL_9_HY_EVS.pdf",
+                "French": "documents/2024-25_CL_9_HY_French.pdf",
+                "Geography": "documents/2024-25_CL_9_HY_Geography.pdf",
+                "German": "documents/2024-25_CL_9_HY_German.pdf",
+                "Hindi": "documents/2024-25_CL_9_HY_Hindi.pdf",
+                "History": "documents/2024-25_CL_9_HY_History.pdf",
+                "Home Science": "documents/2024-25_CL_9_HY_Home_Science.pdf",
+                "Math": "documents/2024-25_CL_9_HY_Math.pdf",
+                "PE": "documents/2024-25_CL_9_HY_PE.pdf",
+                "Physics": "documents/2024-25_CL_9_HY_Physics.pdf",
+                "RAI": "documents/2024-25_CL_9_HY_RAI.pdf"
+            },
+            "FT": {
+                "Bengali": "documents/2024-25_CL_9_FT_Bengali.pdf",
+                "Biology": "documents/2024-25_CL_9_FT_Biology.pdf",
+                "Chemistry": "documents/2024-25_CL_9_FT_Chemistry.pdf",
+                "Commerce": "documents/2024-25_CL_9_FT_Commerce.pdf",
+                "Computer": "documents/2024-25_CL_9_FT_Computer.pdf",
+                "Economics": "documents/2024-25_CL_9_FT_Economics.pdf",
+                "English Language": "documents/2024-25_CL_9_FT_English_Language.pdf",
+                "English Literature": "documents/2024-25_CL_9_FT_English_Literature.pdf",
+                "EVA": "documents/2024-25_CL_9_FT_EVA.pdf",
+                "EVS": "documents/2024-25_CL_9_FT_EVS.pdf",
+                "French": "documents/2024-25_CL_9_FT_French_Language.pdf",
+                "Geography": "documents/2024-25_CL_9_FT_Geography.pdf",
+                "German": "documents/2024-25_CL_9_FT_German.pdf",
+                "Hindi": "documents/2024-25_CL_9_FT_Hindi.pdf",
+                "History": "documents/2024-25_CL_9_FT_History.pdf",
+                "Home Science": "documents/2024-25_CL_9_FT_Home_Science.pdf",
+                "Math": "documents/2024-25_CL_9_FT_Math.pdf",
+                "PE": "documents/2024-25_CL_9_FT_PE.pdf",
+                "Physics": "documents/2024-25_CL_9_FT_Physics.pdf",
+                "RAI": "documents/2024-25_CL_9_FT_RAI.pdf"
+            }
+        },
+        "Class 10": {
+            "MT 1": {
+                "Bengali": "documents/2024-25_CL_10_MT_1_BENGALI.pdf",
+                "Biology": "documents/2024-25_CL_10_MT_1_BIOLOGY.pdf",
+                "Chemistry": "documents/2024-25_CL_10_MT_1_CHEMISTRY.pdf",
+                "Commerce": "documents/2024-25_CL_10_MT_1_COMMERCIAL STUDIES.pdf",
+                "Computer": "documents/2024-25_CL_10_MT_1_COMPUTER APPLICATIONS.pdf",
+                "Economics": "documents/2024-25_CL_10_MT_1_ECONOMIC APPLICATIONS.pdf",
+                "English Language": "documents/2024-25_CL_10_MT_1_LANGUAGE.pdf",
+                "English Literature": "documents/2024-25_CL_10_MT_1_LITERATURE.pdf",
+                "EVA": "#",
+                "EVS": "documents/2024-25_CL_10_MT_1_EVS.pdf",
+                "French": "documents/2024-25_CL_10_MT_1_FRENCH (L2).pdf",
+                "Geography": "documents/2024-25_CL_10_MT_1_GEOGRAPHY.pdf",
+                "German": "documents/2024-25_CL_10_MT_1_GERMAN (L2).pdf",
+                "Hindi": "documents/2024-25_CL_10_MT_1_HINDI.pdf",
+                "History": "documents/2024-25_CL_10_MT_1_HISTORY AND CIVICS.pdf",
+                "Home Science": "documents/2024-25_CL_10_MT_1_HOME SCIENCE.pdf",
+                "Math": "documents/2024-25_CL_10_MT_1_MATHS.pdf",
+                "PE": "#",
+                "Physics": "documents/2024-25_CL_10_MT_1_PHYSICS.pdf",
+                "RAI": "documents/2024-25_CL_10_MT_1_ROBOTICS AND AI.pdf"
+            },
+            "MT 2": {
+                "Bengali": "documents/2024-25_CL_10_MT_2_BENGALI.pdf",
+                "Biology": "documents/2024-25_CL_10_MT_2_BIOLOGY.pdf",
+                "Chemistry": "documents/2024-25_CL_10_MT_2_CHEMISTRY.pdf",
+                "Commerce": "documents/2024-25_CL_10_MT_2_COMMERCIAL STUDIES.pdf",
+                "Computer": "documents/2024-25_CL_10_MT_2_COMPUTER APPLICATIONS.pdf",
+                "Economics": "documents/2024-25_CL_10_MT_2_ECONOMIC APPLICATIONS.pdf",
+                "English Language": "documents/2024-25_CL_10_MT_2_LANGUAGE.pdf",
+                "English Literature": "documents/2024-25_CL_10_MT_2_LITERATURE.pdf",
+                "EVA": "documents/2024-25_CL_10_MT_2_EVA.pdf",
+                "EVS": "documents/2024-25_CL_10_MT_2_EVS.pdf",
+                "French": "documents/2024-25_CL_10_MT_2_FRENCH (L2).pdf",
+                "Geography": "documents/2024-25_CL_10_MT_2_GEOGRAPHY.pdf",
+                "German": "documents/2024-25_CL_10_MT_2_GERMAN (L2).pdf",
+                "Hindi": "documents/2024-25_CL_10_MT_2_HINDI.pdf",
+                "History": "documents/2024-25_CL_10_MT_2_HISTORY AND CIVICS.pdf",
+                "Home Science": "documents/2024-25_CL_10_MT_2_HOME SCIENCE.pdf",
+                "Math": "documents/2024-25_CL_10_MT_2_MATHS.pdf",
+                "PE": "#",
+                "Physics": "documents/2024-25_CL_10_MT_2_PHYSICS.pdf",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "documents/2024-25_CL_10_HY_HY EXAM_BENGALI (SET-A).pdf",
+                "Biology": "documents/2024-25_CL_10_HY_HY EXAM_BIOLOGY (SET-A).pdf",
+                "Chemistry": "documents/2024-25_CL_10_HY_HY EXAM_CHEMISTRY (SET-A).pdf",
+                "Commerce": "#",
+                "Computer": "documents/2024-25_CL_10_HY_HY EXAM_COMPUTER APPLICATIONS (SET-A).pdf",
+                "Economics": "#",
+                "English Language": "documents/2024-25_CL_10_HY_LANGUAGE.pdf",
+                "English Literature": "documents/2024-25_CL_10_HY_LITERATURE.pdf",
+                "EVA": "documents/2024-25_CL_10_HY_HY EXAM_EVA (SET-A).pdf",
+                "EVS": "documents/2024-25_CL_10_HY_HY EXAM_EVS (SETA-).pdf",
+                "French": "documents/2024-25_CL_10_HY_HY EXAM_FRENCH (L2) (SET-A).pdf",
+                "Geography": "documents/2024-25_CL_10_HY_HY EXAM_GEOGRAPHY (SET-A).pdf",
+                "German": "documents/2024-25_CL_10_HY_HY EXAM_GERMAN (L2) (SET-A).pdf",
+                "Hindi": "documents/2024-25_CL_10_HY_HY EXAM_HINDI (SET-A).pdf",
+                "History": "documents/2024-25_CL_10_HY_HY EXAM_HISTORY AND CIVICS (SET-A).pdf",
+                "Home Science": "documents/2024-25_CL_10_HY_HY EXAM_HOME SCIENCE (SET-A).pdf",
+                "Math": "documents/2024-25_CL_10_HY_HY EXAM_MATHS (SET-A).pdf",
+                "PE": "#",
+                "Physics": "documents/2024-25_CL_10_HY_HY EXAM_PHYSICS (SET-A).pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_BIOLOGY (SET-A).pdf",
+                "Chemistry": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_CHEMISTRY (SET-A).pdf",
+                "Commerce": "#",
+                "Computer": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_COMPUTER APPLICATIONS (SET-A).pdf",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "documents/2024-25_CL_10_PREBOARD_LITERATURE.pdf",
+                "EVA": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_EVA (SET-A).pdf",
+                "EVS": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_EVS (SET-A).pdf",
+                "French": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_FRENCH (L2).pdf",
+                "Geography": "#",
+                "German": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_GERMAN (L2) (SET-A).pdf",
+                "Hindi": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_HINDI (SET-A).pdf",
+                "History": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_HISTORY AND CIVICS (SET-A).pdf",
+                "Home Science": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_HOME SCIENCE (SET-A).pdf",
+                "Math": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_MATHS (SET-A).pdf",
+                "PE": "#",
+                "Physics": "documents/2024-25_CL_10_PREBOARD_PRE BOARD_PHYSICS (SET-A).pdf",
+                "RAI": "#"
+            }
+        },
+        "Class 11": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 12": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        }
+    },
+    "2025-26": {
+        "Class 9": {
+            "MT 1": {
+                "Bengali": "documents/2025-26_CL_9_MT_1_Bengali.pdf",
+                "Biology": "documents/2025-26_CL_9_MT_1_Biology.pdf",
+                "Chemistry": "documents/2025-26_CL_9_MT_1_Chemistry.pdf",
+                "Commerce": "documents/2025-26_CL_9_MT_1_Commerce.pdf",
+                "Computer": "documents/2025-26_CL_9_MT_1_Computer.pdf",
+                "Economics": "documents/2025-26_CL_9_MT_1_Economics.pdf",
+                "English Language": "documents/2025-26_CL_9_MT_1_English_Language.pdf",
+                "English Literature": "documents/2025-26_CL_9_MT_1_English_Literature.pdf",
+                "EVA": "documents/2025-26_CL_9_MT_1_EVA.pdf",
+                "EVS": "documents/2025-26_CL_9_MT_1_EVS.pdf",
+                "French": "documents/2025-26_CL_9_MT_1_French.pdf",
+                "Geography": "#",
+                "German": "documents/2025-26_CL_9_MT_1_German.pdf",
+                "Hindi": "documents/2025-26_CL_9_MT_1_Hindi.pdf",
+                "History": "#",
+                "Home Science": "documents/2025-26_CL_9_MT_1_Home_Science.pdf",
+                "Math": "documents/2025-26_CL_9_MT_1_Math.pdf",
+                "PE": "documents/2025-26_CL_9_MT_1_PE.pdf",
+                "Physics": "documents/2025-26_CL_9_MT_1_Physics.pdf",
+                "RAI": "documents/2025-26_CL_9_MT_1_RAI.pdf"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 10": {
+            "MT 1": {
+                "Bengali": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_BENGALI_2025.pdf",
+                "Biology": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_BIOLOGY_2025.pdf",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "documents/2025-26_CL_10_MT_1_LITERATURE.pdf",
+                "EVA": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_EVA_2025.pdf",
+                "EVS": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_EVS_2025.pdf",
+                "French": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_FRENCH 2ND LAN_2025.pdf",
+                "Geography": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_GEOGRAPHY_2025.pdf",
+                "German": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_GERMAN_2025.pdf",
+                "Hindi": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_HINDI_2025.pdf",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_ MATHS_2025.pdf",
+                "PE": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_ PE_2025.pdf",
+                "Physics": "documents/2025-26_CL_10_MT_1_CLASS.10_MT1_ PHYSICS_2025.pdf",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "documents/2025-26_CL_10_HY_BENGALI_CL-10-HY.pdf",
+                "Biology": "documents/2025-26_CL_10_HY_BIOLOGY_CLASS 10_HYE_2025.pdf",
+                "Chemistry": "documents/2025-26_CL_10_HY_CHEMISTRY_CLASS10 _HY_2025.pdf",
+                "Commerce": "#",
+                "Computer": "documents/2025-26_CL_10_HY_COMPUTER APPLICATION_CLASS 10_HY_2025.pdf",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "documents/2025-26_CL_10_HY_10EVA_HY_2025.pdf",
+                "EVS": "documents/2025-26_CL_10_HY_10 EVS_HY_2025_26.pdf",
+                "French": "documents/2025-26_CL_10_HY_FRENCH_SECOND LANGUAGUE_CLASS 10_HY_2025.pdf",
+                "Geography": "documents/2025-26_CL_10_HY_GEOGRAPHY_CLASS 10_HY_2025.pdf",
+                "German": "documents/2025-26_CL_10_HY_GERMAN_CLASS 10_HY_2025.pdf",
+                "Hindi": "documents/2025-26_CL_10_HY_HINDI_CLASS 10_HY_2025.pdf",
+                "History": "documents/2025-26_CL_10_HY_HISTORY_CLASS 10_HALF YEARLY_2025.pdf",
+                "Home Science": "#",
+                "Math": "documents/2025-26_CL_10_HY_MATHEMATICS_CLASS 10_HY_2025.pdf",
+                "PE": "#",
+                "Physics": "documents/2025-26_CL_10_HY_PHYSICS_CLASS 10_HY.pdf",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "documents/2025-26_CL_10_PREBOARD_BENGALI_CL- 10 PB_SET -A-- MOHUA.pdf",
+                "Biology": "documents/2025-26_CL_10_PREBOARD_CLASS X_ BIOLOGY PREBOARDS -2026_ SET A.pdf",
+                "Chemistry": "documents/2025-26_CL_10_PREBOARD_CLASS X_PREBOARDCHEMISTRY SET A.pdf",
+                "Commerce": "#",
+                "Computer": "documents/2025-26_CL_10_PREBOARD_COMPUTER APPLICATIONS_CLASS 10_PB_2025.pdf",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "documents/2025-26_CL_10_PREBOARD_10EVA_PB_SET A_2025.pdf",
+                "EVS": "documents/2025-26_CL_10_PREBOARD_EVS_10_PB_2025.pdf",
+                "French": "documents/2025-26_CL_10_PREBOARD_FRENCH_SECOND LANGUAGE_GRADE X_PRE BOARD_2025 (1).pdf",
+                "Geography": "documents/2025-26_CL_10_PREBOARD_CLASS X_GEOGRAPHY_PREBOARDS_2025_26.pdf",
+                "German": "documents/2025-26_CL_10_PREBOARD_GERMAN_CLASS 10_PREBOARD_2025.pdf",
+                "Hindi": "documents/2025-26_CL_10_PREBOARD_HINDI_CLASS X_PRE_BOARD_2025.pdf",
+                "History": "documents/2025-26_CL_10_PREBOARD_HISTORYANDCIVICS_CLASS10_PREBOARD_2025.pdf",
+                "Home Science": "#",
+                "Math": "documents/2025-26_CL_10_PREBOARD_MATHS_CLASS X_PREBOARD.pdf",
+                "PE": "documents/2025-26_CL_10_PREBOARD_ECONOMIC APPLICATIONS_CLASS 10_PRE BOARD 2025_26_SET_A-(Q-PAPER)-1.pdf",
+                "Physics": "documents/2025-26_CL_10_PREBOARD_PHYSICS _SET A_CLASS X PREBOARD_2025-.DOCX.DOCX (3).pdf",
+                "RAI": "documents/2025-26_CL_10_PREBOARD_RAI-PRE BOARD CLASS 10.pdf"
+            }
+        },
+        "Class 11": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        },
+        "Class 12": {
+            "MT 1": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "MT 2": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "HY": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            },
+            "FT": {
+                "Bengali": "#",
+                "Biology": "#",
+                "Chemistry": "#",
+                "Commerce": "#",
+                "Computer": "#",
+                "Economics": "#",
+                "English Language": "#",
+                "English Literature": "#",
+                "EVA": "#",
+                "EVS": "#",
+                "French": "#",
+                "Geography": "#",
+                "German": "#",
+                "Hindi": "#",
+                "History": "#",
+                "Home Science": "#",
+                "Math": "#",
+                "PE": "#",
+                "Physics": "#",
+                "RAI": "#"
+            }
+        }
+    },
+    "Study Materials": {
+        "Biology Class 10 Book PDFS":{
+          "Biology Class 10 Book PDFS Endocrine System": "documents/Study_Material_Class_9_Biology_Class_10_Book_PDFS_Endocrine_System.pdf",
+          "Biology Class 10 Book PDFS Excretory System": "documents/Study_Material_Class_9_Biology_Class_10_Book_PDFS_Excretory_System.pdf",
+          "Biology Class 10 Book PDFS Reproduction": "documents/Study_Material_Class_9_Biology_Class_10_Book_PDFS_Reproduction.pdf",
+          "Biology Class 10 Book PDFS Full Book": "documents/Study_Material_Class_9_Biology_Class_10_Book_PDFS_Full_Book.pdf",
+        },
+        "Physics FT":{
+          "Physics FT Current Electricity": "documents/Study_Material_Class_9_Physics_FT_Current_Electricity.pdf",
+          "Physics FT Heat and Energy": "documents/Study_Material_Class_9_Physics_FT_Heat_and_Energy.pdf",
+          "Physics FT Magnetism": "documents/Study_Material_Class_9_Physics_FT_Magnetism.pdf",
+          "Physics FT Propagation of Sound Waves": "documents/Study_Material_Class_9_Physics_FT_Propagation_of_Sound_Waves.pdf",
+          "Physics FT Reflection of Light": "documents/Study_Material_Class_9_Physics_FT_Reflection_of_Light.pdf",
+          "Physics FT  Principle and Floatation": "documents/Study_Material_Class_9_Physics_FT__Principle_and_Floatation.pdf"
 
+        }
+    }
+};
 
+// Expose documents globally immediately after definition
+window.documents = documents;
+
+// Load user-added document entries (moved from Library)
+if (typeof window.loadCustomDocuments === 'function') {
+  window.loadCustomDocuments();
+}
 
 
 function loadNotes() {
@@ -1161,252 +4039,6 @@ function deleteNote(noteId) {
     }
   );
 }
-let documents = {
-    "Study Material Class 9": {
-        "Physics FT": {
-            "Upthrust in Fluids, Archimedes' Principle and Floatation": "https://drive.google.com/file/d/1A5IbecU77W4krqBj2zaiahZh46Q8Je6E/preview", "Heat and Energy": "https://drive.google.com/file/d/1pyvt2igU8prlMty5nwhhi6woR6a3RSeJ/preview", "Reflection of Light": "https://drive.google.com/file/d/1Fo6DpHIp658q9JiFfzf4I8puPhph0WoA/preview", "Propagation of Sound Waves": "https://drive.google.com/file/d/1uxLKeXoP5LOP-kI9B4EhHmvKrpka5A6M/preview", "Current Electricity": "https://drive.google.com/file/d/1a8oXvkZPDJpTZKRO8-lYcvk1uuLB39I8/preview", "Magnetism": "https://drive.google.com/file/d/1ijJWkhghtNb2I5Z1bOeClcA9Mg8l4Qf7/preview"},
-        "Biology Class 10 Book PDFS": {
-            "Excretory System": "https://drive.google.com/file/d/16b4aqhobYQm_XqXgadk5383J-Mkq6bNm/preview", "Full Book": "https://drive.google.com/file/d/1NCj_IUP8Kss0gQ3uj6cUBtLMNqKvkIRI/preview", "Endocrine System": "https://drive.google.com/file/d/1REKQFiPyzOvM9n7GB1hnoThTSkrpePT4/preview"
-
-		}
-    },
-    "2025-26": {
-        "CL 9": {
-            "MT 1": {
-                "Bengali": "https://drive.google.com/file/d/1yjjRkhDJhZVd1FHWV82ez2_GAoFji_cZ/preview", "English Language": "https://drive.google.com/file/d/1CowuymNfNqICaN-Yk9HG_P1KjoiDfdJ2/preview", "English Literature": "https://drive.google.com/file/d/1CowuymNfNqICaN-Yk9HG_P1KjoiDfdJ2/preview", "French": "https://drive.google.com/file/d/13W1vnNvhdVZi9m1b8V412Y-smnMyrLMM/preview", "German": "https://drive.google.com/file/d/1qh80OY4hSuqowBAAw7Ip2tlwSJxdWtcW/preview",
-                "Hindi": "https://drive.google.com/file/d/1FZ3fUHkvI_U30Xv7AxgeVm4G0y2G1Hpk/preview", "History": "https://drive.google.com/file/d/FILE_ID/preview", "Geography": "https://drive.google.com/file/d/FILE_ID/preview", "Commerce": "https://drive.google.com/file/d/1VWtKb02OAPqvJbOModwQg1q5QcvfiCYa/preview", "EVS": "https://drive.google.com/file/d/1Uzzwu2zEHv6az5C_zMcTPaviToSg9Ck9/preview", "Home Science": "https://drive.google.com/file/d/1gxfzcZ0ULG1zGfALpVTiz5kFFuWrGtv8/preview",
-                "Math": "https://drive.google.com/file/d/1GdK4fATuaKY5gjdtAwdoAlwbRxjClX9o/preview", "Physics": "https://drive.google.com/file/d/19FH5N__eOoYng5niWrRPbUIwrGv8fqE4/preview", "Chemistry": "https://drive.google.com/file/d/1-zc_ySK3_VChlX6UtyIVsZj4Rwp7Tutd/preview", "Biology": "https://drive.google.com/file/d/1je9WRmONUAUEPIdXbtKnHfRq__uUQ2LL/preview", "Computer": "https://drive.google.com/file/d/1oCeM3QDLBHcBu5r6lr4z-Z0p-6O4NNpZ/preview", "RAI": "https://drive.google.com/file/d/1oJYFlEOD7F1qgYeGpdyM7rHLP1tzqlss/preview",
-                "Economics": "https://drive.google.com/file/d/1zb5I5BngNEIe2UaWWNmsgktUsnVUa-_4/preview", "EVA": "https://drive.google.com/file/d/1kJuxbztbd-9eGV11psKlNDEWyfb8L-Xr/preview", "PE": "https://drive.google.com/file/d/1mDjZY3bi5TM6kRT8OEJzsuwPcdpaNUat/preview"
-            },
-            "MT 2": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "HY": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "https://drive.google.com/file/d/1WoqWYl9HGHN89sEP4joDltAxvJ0w0L7E/preview",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "FT": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            }
-        },
-        "CL 10": {
-            "MT 1": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "MT 2": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "HY": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "FT": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            }
-        },
-        "CL 11": {
-            "MT 1": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "MT 2": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "HY": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "FT": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            }
-        },
-        "CL 12": {
-            "MT 1": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "MT 2": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "HY": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            },
-            "FT": {
-                "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#",
-                "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#",
-                "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#",
-                "Economics": "#", "EVA": "#", "PE": "#"
-            }
-        }
-    },
-    "2024-25": {
-        "CL 9": {
-            "MT 1": { "Bengali": "https://drive.google.com/file/d/1cIYGqG4UCVHo4s-tEZ2D59aLyQ6sxlCM/preview", "English Language": "https://drive.google.com/file/d/14aPyDYCpIRBPMqcnxndFkzzs8tenRVRh/preview", "English Literature": "https://drive.google.com/file/d/1LslhWbv0H_4MZLzWAU-4KX223T7RcO4V/preview", "French": "https://drive.google.com/file/d/1nzwSNFO9baR0GrT1urCmNMUGJqJizRWH/preview", "German": "#", "Hindi": "https://drive.google.com/file/d/1Xg-2sxfwZIvfP3j4kg2VTiP9SRO6lVib/preview", "History": "https://drive.google.com/file/d/1fFE6NSeLQl-tm4FMuHz72686A6p1-oZ2/preview", "Geography": "https://drive.google.com/file/d/1FGi6dQLs5jK6EsftRIIjrBK2EluvktYg/preview", "Commerce": "https://drive.google.com/file/d/1cvP7Dn00dNBMmwQmUtj2n5puCfacCQ6R/preview", "EVS": "https://drive.google.com/file/d/1ZvjRuneUyioDHXeC7PnH7yuG8dPinMpr/preview", "Home Science": "https://drive.google.com/file/d/1gOIwAbJqtrHSaXtwygVQQPpcgBoUZugJ/preview", "Math": "https://drive.google.com/file/d/1BogiVeOYHykB8-m_osdnAtdUIJTdprwF/preview", "Physics": "https://docs.google.com/document/d/1LoZ8DVr6TWjBwHF4osfuVmxn521jjACV/export?format=pdf", "Chemistry": "https://drive.google.com/file/d/1PBqrFh6XqItUcjAtlhLQ208cn0F5Q6iV/preview", "Biology": "https://drive.google.com/file/d/19BpXVTP3gxDVzChEb6wDm4F6GLlzpNqT/preview", "Computer": "https://drive.google.com/file/d/1yXuEl8ZwlfaWhR5kx-nQvmRH5LHL2Y5w/preview", "RAI": "https://drive.google.com/file/d/1w0kfCiKP4ALiq1fQy9fZVg0Ey1Fpw3II/preview", "Economics": "https://drive.google.com/file/d/1oidrgY15uBtvN8fQNmrDxO__Lfnfpui/preview", "EVA": "https://drive.google.com/file/d/1DZ_sL0vomeqY9HDpgi6YamlRg0nD1sa-/preview", "PE": "https://drive.google.com/file/d/1M_kg2_nN6JnYQROcS3rNUjaYNgXX9LXn/preview" },
-            "MT 2": { "Bengali": "https://drive.google.com/file/d/10DtfWHt396FVG4t_7oIAa1jk9Y11-cFZ/preview", "English Language": "https://drive.google.com/file/d/1j9XrQ7TFUnmkxSXk8lA-xQr_2IIkoP72/preview", "English Literature": "https://drive.google.com/file/d/13jX8zYM9SMLQN-szoZfZI6pnjbuh64ro/preview", "French": "https://drive.google.com/file/d/12fEF2VtcZ-dNpVb4MgrF33jt6SPF9Ycf/preview", "German": "https://drive.google.com/file/d/1cxFdBoI3p3Lnj1gjp1chxhkQ5Sl_mXLP/preview", "Hindi": "https://drive.google.com/file/d/1eRiAOqDmCKYskpZvmu2co3Z4UaYywUxU/preview", "History": "https://drive.google.com/file/d/1pp7cTB33KIissIppMoEkDx9grFWIoZNm/preview", "Geography": "https://drive.google.com/file/d/15891P9LXYPaf5P6kbEp1CMTJNbw7HIDv/preview", "Commerce": "https://drive.google.com/file/d/1npz0e7qxiCafKUWLitoGm_tolrHO5Jdy/preview", "EVS": "https://drive.google.com/file/d/1n1HjjD2b-h76ra_gEu-rus01rWcCfx8-/preview", "Home Science": "https://drive.google.com/file/d/1WEpX2gw1x2aekhFQ4NKBs2_1rFTd9zMx/preview", "Math": "https://drive.google.com/file/d/1FIlm-AXJ2AK9ILH_xcoUF1YDe3EY92M9/preview", "Physics": "https://drive.google.com/file/d/1OCG4erOJrkHTcHlJPGT1wOMmh-sIY6_M/preview", "Chemistry": "https://drive.google.com/file/d/1VOAoCBiBGyXhIJXt1jAYDaxMJCn-nO-E/preview", "Biology": "https://drive.google.com/file/d/18MVLcSHliFMXzY8mekZn46u-Jd1yJP2Q/preview", "Computer": "https://drive.google.com/file/d/1SdUvZDAW6GJes3EZhSTHkPygYwKz1X0Z/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1HLzvCm_b5XqIYgezey7tRN9AW5uLdy23/preview", "EVA": "https://drive.google.com/file/d/1gjPmZzpz3FPskyp91f2gcpLyoQjO-7ji/preview", "PE": "https://drive.google.com/file/d/133c-aWy3UCsaeS044nABj500z6IFioWz/preview" },
-            "HY": { "English Language": "https://drive.google.com/file/d/1zmUPYKbHbymDx5RmTj47O9P-K4YZNnDH/preview", "English Literature": "https://drive.google.com/file/d/18a1dSMXeOTGDA4l-BWfUwDIJB8iqAVyY/preview", "French": "https://drive.google.com/file/d/1sntn898IFgaeOuY77NHfkS8qg4uDHpUt/preview", "German": "https://drive.google.com/file/d/1nKMb5kxN5fQRdrhrFfGaETIZsKWnSSgC/preview", "Hindi": "https://drive.google.com/file/d/1OXnsKkqLpuks_Wq6wtj3wDCqGR69Z1CU/preview", "History": "https://drive.google.com/file/d/12LvFdtJMYeMSG3eb5mIiVONur2gq5SWa/preview", "Geography": "https://drive.google.com/file/d/1ScozekGSAoHu7Eexhm55Z0kE1hkb4Rlg/preview", "Commerce": "https://drive.google.com/file/d/1Uc2mB6JZN6gm7TyBK-JXhfAPfFmUNkYI/preview", "EVS": "https://drive.google.com/file/d/1vFwI2f0n1A3-aXQWCYRfGXxAD7WN0PUg/preview", "Home Science": "https://drive.google.com/file/d/1lcPxelAdqXUbg6vI6zC_AIypcvPaoOj3/preview", "Math": "https://drive.google.com/file/d/1Z-qYXEB5gxGOZx91sTAiKun33hGit8nP/preview", "Physics": "https://drive.google.com/file/d/1ptuhY6EuhLq-nLkXJeILBOr4J6xHtHqQ/preview", "Chemistry": "https://drive.google.com/file/d/1zDnKoQlTl7qqaIRj9FuEWBLTBNstISRK/preview", "Biology": "https://drive.google.com/file/d/1YQeAzNUjgFu6D5sQ6khdaIduiSar5knC/preview", "Computer": "https://drive.google.com/file/d/1ybGbb-JGwGmYz2Bvj1wSGbbt-QWAXPP5/preview", "RAI": "https://drive.google.com/file/d/1R5FhCBZiZ4touw2rTnYFQ6j7XsPtfmr3/preview", "Economics": "https://drive.google.com/file/d/1yUh1SGsXY43pBdngmQaTmTTKHZDF0SF7/preview", "EVA": "https://drive.google.com/file/d/1kNmheEUvq7Uq_GJ68RLwFzxfIGNZ3x2x/preview", "PE": "https://drive.google.com/file/d/16Id1gxjYTsQ9LY-n6W21rA67obGuldvi/preview" },
-            "FT": { "Bengali": "https://drive.google.com/file/d/1HgLAkHfKdHABjEoqL74c1lpPE1RkNCZn/preview", "English Language": "https://drive.google.com/file/d/1G2CrnFbyocuTMAmNWNd0RmUt_cg-iP7I/preview", "English Literature": "https://drive.google.com/file/d/1AjiRg37wZSd9eFw2mgLY0FRm69eayW15/preview", "French Literature": "https://drive.google.com/file/d/1FDjJ84Llb7w9u79a8SbjY0llBbqr_aUV/preview", "French Language": "https://drive.google.com/file/d/1f7SNYZTSTShlgDUlXqjrrvatRZ0dpYQg/preview", "German": "https://drive.google.com/file/d/1pR2h7YFD2raqDAGiSxLY84JP77_FP8l2/preview", "Hindi": "https://drive.google.com/file/d/1_AEp8S9JC0gVDHV0gXuXhhuQLZxuYUow/preview", "History": "https://drive.google.com/file/d/1vu6UgCqBGKJk0SnQDudVuXwTYVBbb_zc/preview", "Geography": "https://drive.google.com/file/d/1pRP6NyHvgkM1z97MbbS1VJ4JTs0nBqUE/preview", "Commerce": "https://drive.google.com/file/d/1nfg_owhPyIppRFLL5HZJ__wAxJEqbT15/preview", "EVS": "https://drive.google.com/file/d/1T4m1pUK8oGgrzqJA5GRy6Vpl5Vwr8P_J/preview", "Home Science": "https://drive.google.com/file/d/1FaF2WXejrgLfJb26Kb9cqXWZVi1aJj4i/preview", "Math": "https://drive.google.com/file/d/1xCUXZ1SYV0D0mSaShs5Bcc_W-tP8cOZV/preview", "Physics": "https://drive.google.com/file/d/19ahVLGkZyGo-vjATSBqCyxOQ__kEPBMT/preview", "Chemistry": "https://drive.google.com/file/d/1WC9-hLU78E1ORWm3FQ-I7z1Yhoag2-YG/preview", "Biology": "https://drive.google.com/file/d/1ro72l8Ir5GFl1uLYG89kJ1nPoAIjxV_l/preview", "Computer": "https://drive.google.com/file/d/1arhoEIO0xNtwKT78qznijpUDTMnMGf64/preview", "RAI": "https://drive.google.com/file/d/1re9cS9an8eOVfThxvJqRmL1t2C2tqnHG/preview", "Economics": "https://drive.google.com/file/d/1Xxi4ZQR4fUDH6lnlq5_wovUdWzvRU5VW/preview", "EVA": "https://drive.google.com/file/d/1IPkgrMQz-xr2dW3b82Bng4UINxkWyis4/preview", "PE": "https://drive.google.com/file/d/1ywJAJyHxpYfVxzYqOlnVf0TWI318SfwT/preview" }
-        },
-        "CL 10": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 11": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 12": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        }
-    },
-    "2023-24": {
-        "CL 9": {
-            "MT 1": { "Bengali": "https://drive.google.com/file/d/1c-vK0rN4aK7WB2FwcQBXwDRQtmQrxoY1/preview", "English Language": "https://drive.google.com/file/d/1XRxkJ51D0WQlGZtspAN-2GDdFnuRWLoh/preview", "English Literature": "https://drive.google.com/file/d/1eKaHOmhH43gLa4Smqn-XkV_0R51SQw1i/preview", "French": "https://drive.google.com/file/d/1olQzT5DMAx7AUq4IfihYS8OfjDeVfNnY/preview", "German": "https://drive.google.com/file/d/1cuKc32YbOVz34eU_exQBgML_jtzc7eAb/preview", "Hindi": "https://drive.google.com/file/d/1yCt_8iK_LyDBUWYkPf5YQ1F3RbKRhuMX/preview", "History": "https://drive.google.com/file/d/1K6ID-rFDy4iP7UfqM2emBzfM09jqiiSK/preview", "Geography": "https://drive.google.com/file/d/1sh4Yr3vd50zqSz3rbkuoHK48eikEjcpl/preview", "Commerce": "https://drive.google.com/file/d/1Zdf-0wnp-9rAIj4Ak4e1vRgeFMUXC_gZ/preview", "EVS": "https://drive.google.com/file/d/1zHNZU9V7NkJt2qiNNLxNvcIDFXJTfTqo/preview", "Home Science": "https://drive.google.com/file/d/1hkAyDM1cJxitJ9YlO5ix1kAbKZ8Oirgx/preview", "Math": "https://drive.google.com/file/d/1BTzi6LrA7quOc7LeexAlhhxmyy5Jaquk/preview", "Physics": "#", "Chemistry": "https://drive.google.com/file/d/1bMH502lr-FTOX1eH6zDsMvjKpYOunDkw/preview", "Biology": "https://drive.google.com/file/d/1u-iuo3q4JEKzduxYbsJE4FspIPCBNOzx/preview", "Computer": "https://drive.google.com/file/d/1MQQmJ1if1samEQC5s2LMuaRCLZ2sUjkX/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1GUn4kcW8QTtac2w4-S1vKksQE4cfIDvj/preview", "EVA": "https://drive.google.com/file/d/1xt74vn5dV41lqmtv_75iFF0_nvDO5KfM/preview", "PE": "https://drive.google.com/file/d/1xOQkK1dIsylZcO7K58ZqVvryO9ASHJ5t/preview" },
-            "MT 2": {"Bengali": "https://drive.google.com/file/d/1WCHQoAxzRksILhdInch_tR7dSxKIMIz9/preview", "English Language": "https://drive.google.com/file/d/1sE3Lo75N7zCqOHkJnLKK82wv_2E3kBe1/preview", "English Literature": "https://drive.google.com/file/d/1yCHslM7CzHo4sU7C0ibDCl55N85dZ5ZX/preview", "French": "https://drive.google.com/file/d/1ZCVtreQAp63dDhAQ-IQWfI3NgAz3nzBA/preview", "German": "https://drive.google.com/file/d/1FbbMryztQXUyuePl64ugeKMytxoXt0q6/preview", "Hindi": "https://drive.google.com/file/d/1BR0gmTov1tUORXDfQ8Kyymw4VbnfglHZ/preview", "History": "https://drive.google.com/file/d/1TV7bE8O7RC4nGXlNtLombletNFMd9I0E/preview", "Geography": "https://drive.google.com/file/d/1qyA2Nmwy2-yuCpYtOaI3Kx-XayB5BJPL/preview", "Commerce": "https://drive.google.com/file/d/1Es7zC2_IKImREuSfD8rvoMgdUTqPBdIX/preview", "EVS": "https://drive.google.com/file/d/1USZqKLQ7NLjokqpqeNlFseLDykYtF-ih/preview", "Home Science": "https://drive.google.com/file/d/1oXUkrsyYtZNhsbckE2qtkmZGjy8989h2/preview", "Math": "https://drive.google.com/file/d/1ceaETINVcvCPfJ9700A5uRwkbF-o8_Mk/preview", "Physics": "https://drive.google.com/file/d/1Q3XHlixrIOoYMW9TAQ5jDwSfBHsCxLPF/preview", "Chemistry": "https://drive.google.com/file/d/1V36J2SFONwq-NEiJmkwkSXnmmYA5m7s_/preview", "Biology": "https://drive.google.com/file/d/1YvRAf7AaV_y2nmDrs8F-AzqCBUhLhCZ0/preview", "Computer": "https://drive.google.com/file/d/1cb2NryP4B7ZZjhwwNIFTkzgUZG-Mwqz6/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/12xJ0_Y-B-LiZxfCZqyT_mfcFYbn9flP2/preview", "EVA": "https://drive.google.com/file/d/1eijwwhQGRrij0BUEXfRqz5SHRg4FsYLN/preview", "PE": "https://drive.google.com/file/d/1HpJ6gby6l8qlAZrj_lQ-aQKhwlj37bwg/preview"},
-            "HY": { "Bengali": "https://drive.google.com/file/d/1d8nCWMSYo6zUMglYguVQA5NJAPzCb4C_/preview", "English Language": "https://drive.google.com/file/d/1Yp25i8XvutlaS4lKxhec2BhAFu0EacoM/preview", "English Literature": "https://drive.google.com/file/d/1MYoMc6VkXnJCaKlhuZo1ZOISfY-7gwBT/preview", "French": "https://drive.google.com/file/d/1SUwPGGJ7ty-kNsVKgKlcdPoh9QYOvTFD/preview", "German": "https://drive.google.com/file/d/1Rg2M7P6LybuxJB_Eb64vlfwqKtwN4qlX/preview", "Hindi": "https://drive.google.com/file/d/19tZwMXTVziAhVMeK4uuNIrkdR6AyO1tt/preview", "History": "https://drive.google.com/file/d/14O0K9dENROEq8UQqQ743bxMob4rIr85o/preview", "Geography": "https://drive.google.com/file/d/1_ZWDxYTTYsXdzBQx9VCdsNcNpls8TEtV/preview", "Commerce": "https://drive.google.com/file/d/11Vrxv_WU6AmwWCaj_Ucsx30yvuUFR1RQ/preview", "EVS": "https://drive.google.com/file/d/1gWIpzZpanMhZl2iS9vR-2Z1_ABJ5liJG/preview", "Home Science": "https://drive.google.com/file/d/1_BMZ03SK1jX4Uhy7QqaiSMevYX8i290k/preview", "Math": "https://drive.google.com/file/d/1BbRYZCMyK448XuIaQrDHgl-73qUFmCIo/preview", "Physics": "https://drive.google.com/file/d/1R84xR6jJqh1WF5mDlmleosHkbbR1hWV3/preview", "Chemistry": "https://drive.google.com/file/d/1mhX9m9f0-Q__qp4ZKz9xdxZy_f69mqmI/preview", "Biology": "https://drive.google.com/file/d/1bdM4NCl16qTan5-NISHFIl0Dl5_kMqPj/preview", "Computer": "https://drive.google.com/file/d/19RADs3dzRcuo8eNnESnhFpYkBwKYn4Ho/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1Xi-vqOqPG4LWnufwns7-gv85NFO_SxcP/preview", "EVA": "https://drive.google.com/file/d/1vgPwG7wFneEMduhAgRyKuUJFwCjNATXc/preview", "PE": "https://drive.google.com/file/d/1hS29MnH1lMMZkdvaXsVuvCeyTKmdN6FK/preview" },
-            "FT": {"Bengali": "https://drive.google.com/file/d/1ztnO_qBHt1dx7bXZKN5ROrRIOV8uOJfX/preview", "English Language": "https://drive.google.com/file/d/13QeeEGYSZT4-eKx7jZWJR_-E57vzlywH/preview", "English Literature": "https://drive.google.com/file/d/13KWXa3uqR-0BB_dA5H3RPrNyMosBMAG8/preview", "French": "https://drive.google.com/file/d/18qTTCazjDY0PLCej-3GfxrLMOclcf3Fq/preview", "German": "https://drive.google.com/file/d/1-eRNfpD4XHhRDShcFB3_TjbwBizD0bvt/preview", "Hindi": "https://drive.google.com/file/d/1p3S4yKEU7u4CTffpgHJ_tDx7z-1dhacC/preview", "History": "https://drive.google.com/file/d/17JS7IWmoVZ7BgQGiUi_bEAk31h5YmgGW/preview", "Geography": "https://drive.google.com/file/d/19PxTLnJOlYKY35cv7TDYeTAfCNDao0H4/preview", "Commerce": "https://drive.google.com/file/d/1dPlotdh2xbS20t4kkNBipzrRdVfnZ9NL/preview", "EVS": "https://drive.google.com/file/d/1TMajKcpIiqo2u9cJTm-sZRfz-aqGYl3f/preview", "Home Science": "https://drive.google.com/file/d/1xi8yjOFMUQraLUgB8yE6ToP5I_DPaVRn/preview", "Math": "https://drive.google.com/file/d/1gSe9E9iELORlfB13bGV9p1KqnIq42XKl/preview", "Physics": "https://drive.google.com/file/d/1gZQjzXbMgyqC5Ufb9hHVIxxL5B1UOqs0/preview", "Chemistry": "https://drive.google.com/file/d/1KUQyOabuMmHSb3Q8U7y6nGo13cpfGQPt/preview", "Biology": "https://drive.google.com/file/d/1eBICf8zK8jCnYQU7oyEmGq0MNRs1f4_R/preview", "Computer": "https://drive.google.com/file/d/1oUubC4mQM9E0xFimeYbMhkmeonYseLox/preview", "RAI": "https://drive.google.com/file/d/11OafyEIWJUhjIGaX8hAeTLv1jl7qRSdI/preview", "Economics": "https://drive.google.com/file/d/1kVikKts1Q-rvuCmeir54MI5XIO6ChjLF/preview", "EVA": "https://drive.google.com/file/d/1DbpECUc9f_SK60Enlz2WtA02zQ4J7BGu/preview", "PE": "https://drive.google.com/file/d/1eI60zBGBxFi2ZJ2gzvWrQwSqDlFr5t79/preview"}
-        },
-        "CL 10": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 11": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 12": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        }
-    },
-    "2022-23": {
-        "CL 9": {
-            "MT 1": { "Bengali":"https://drive.google.com/file/d/1uevDlzrhnTWz4lbp4iyKqFLeLHZ9pA6m/preview","English Language":"https://drive.google.com/file/d/1mMZwD6LZuHRoWYz3euxCCHRu0IkpAsEf/preview","English Literature":"https://drive.google.com/file/d/1DYsf7sGFburjV2BZfdwN8qucw6Fq9jWf/preview","French":"https://drive.google.com/file/d/1Wqwyvvi1Jax0uTyyIrTm7I0NtZtISfJw/preview","German":"https://drive.google.com/file/d/1YYyC32MVua1zNTrg0lgtBc0UpZEo7qWT/preview","Hindi":"https://docs.google.com/document/d/1n5eB_cZItHvhmtx_8trylpMSZd5Fk-x5/preview","History":"https://drive.google.com/file/d/1NKKcdcrndSsv0j8-Cpz9CKJ1KMrLm37R/preview","Geography":"https://docs.google.com/document/d/1K7zse0w-xp716jJhfGYP_d7VWF8Ik1NS/preview","Commerce":"https://drive.google.com/file/d/1aqgsVegPbi3NqUc5S1CXwdY9cNdo44nP/preview","EVS":"https://drive.google.com/file/d/1buDuTs7ygNjECQKdfsuNJYPnyH-r7IUa/preview","Home Science":"https://docs.google.com/document/d/1k8fqBsUl64mG8ZdrzIR-SKBolToImK8v/preview","Math":"https://drive.google.com/file/d/1VmJHEBOBg_BnYmMKbxhLiJX6vOMn1G3C/preview","Physics":"https://drive.google.com/file/d/1MMvdgs3M0-VatygCurcXZwIWoeSHFm8C/preview","Chemistry":"https://drive.google.com/file/d/1J2ijVwbneFop6pk-1fv0pxR2prO_s5KA/preview","Biology":"https://drive.google.com/file/d/15bcZBxTwlVEwPsVhLfukxKkrxbuL06Xo/preview","Computer":"https://drive.google.com/file/d/1JV6QXL-HxgBhDayTSDpxID0BAI5HsLXZ/preview","RAI":"#","Economics":"https://docs.google.com/document/d/123Hc3hCtNga0y96Y9lChZlVqVvCyVb8k/preview","EVA":"https://drive.google.com/file/d/1zftl8OFWSv5hQE6NDfa-eIBXArw8tjxN/preview","PE":"https://drive.google.com/file/d/1Hk3b-AIwpS01WEY2KuxWvc8Sc7GM0LS6/preview"},
-            "MT2":{"Bengali":"https://drive.google.com/file/d/1zoM0oTMVMqMZaTHZHF7N-8Rne_Rs1tg_/preview","EnglishLanguage":"https://drive.google.com/file/d/1D3RF7Mzn44VWVCqW-q7WeCK22wSvhUYj/preview","EnglishLiterature":"https://drive.google.com/file/d/1HxoGvfbJ1u0BrsVKLte8EDw9Z3jgssaM/preview","French":"https://drive.google.com/file/d/1DGtyNun2ouFzngCV7JbRyqnbCpbFz0wl/preview","German":"https://drive.google.com/file/d/1Vf6t75XTEGdICFnzktQFUEzKx_Ztr4Lg/preview","Hindi":"https://drive.google.com/file/d/11zapNSzsaM2hnYRAZ5sP3oIpBSXf6v9f/preview","History":"https://drive.google.com/file/d/1pZVkTt-Y6B7Qj11wfxOaAjtJdzrlwScw/preview","Geography":"https://drive.google.com/file/d/1KirMqPxFq6T-uV0Iwc1DGHMTtqNmY--P/preview","Commerce":"https://drive.google.com/file/d/1A7dp04R6VyWioeB8PsZzVrOmR7SGysox/preview","EVS":"https://drive.google.com/file/d/1HPKNgoRb2Hb_2r2MJ0CYUchci0rTjt_k/preview","HomeScience":"https://drive.google.com/file/d/1XoDMVG1k7PKeCK6g9Z8eJRXyq_DSqlR6/preview","Math":"https://drive.google.com/file/d/1yQADSQdxWKWQfrNPHQbx-8AvUKG31oLG/preview","Physics":"https://drive.google.com/file/d/1zQ9VRlKfyyYJbrEcSpVJ1NLjfD2YF-sQ/preview","Chemistry":"https://drive.google.com/file/d/1FqE_1Wrqexb5uEHF9i5S1dp85qWixczr/preview","Biology":"https://drive.google.com/file/d/1F0DxDxlyGwAWbcgE4XW7uu9T8_Cpjz38/preview","Computer":"https://drive.google.com/document/d/1z4tPKxzcdspPejJK6yoasR1cflavTDEp/preview","RAI":"#","Economics":"https://drive.google.com/file/d/1mYeodINWSul_cFrfAeTFD3lCSYKXP5Y9/preview","EVA":"https://drive.google.com/document/d/1kMrOMWAKEWKN_U6kslpYRc2qbbo6ozMZ/preview","PE":"https://drive.google.com/file/d/1MoL7JeFh23J8jEzsooQG9qzvA5caHJC9/preview"},
-            "HY":{"Bengali":"https://drive.google.com/file/d/180_ukzNQACowFghDlU5E6Pw1JPibIlHy/preview","English Language":"https://drive.google.com/file/d/14Z_ZLI7WKDiRFfV3FxlBvQgzv2f2xKaO/preview","English Literature":"https://drive.google.com/file/d/1V6AbIcgxtyYzuolkdoHyqyMvn7iqx50O/preview","French":"https://drive.google.com/file/d/1inV9vWpQRsZFkPlB7d1CWHLo4oQHUKOL/preview","German":"https://docs.google.com/document/d/1iZDhL1Hccgqu6iJm3AML-D1d7e5QYQn7/preview","Hindi":"https://drive.google.com/file/d/1qS6w4n_wBMufTomlNCKbtIxTIpPkEVxa/preview","History":"https://drive.google.com/file/d/1EvVjDc2gVwpcparLnB-7agi6hdt9jENR/preview","Geography":"https://drive.google.com/file/d/1wzJyOnEHI0OjI_TlHTT9-7ibLq0dFHUU/preview","Commerce":"https://drive.google.com/file/d/13lpTDor0enLHwZpjfVfa-USHk9HuPnvJ/preview","EVS":"https://drive.google.com/file/d/1jR96m_skfTYit0TWAR-JNNoFuFP8fO4C/preview","Home Science":"https://docs.google.com/document/d/1dYhjtSukLoc3cCcys8yMCMIZtbS7b0Jw/preview","Math":"https://drive.google.com/file/d/1F8ULAi1KBxsBzmi_ezgW27Kmi7-5PDUL/preview","Physics":"https://drive.google.com/file/d/1triKi2IkAhHwozomBrV7AYQ5CzWsEN4s/preview","Chemistry":"https://drive.google.com/file/d/18aXCuli8Q0x7rdJQdI9bsU5OJ3wpcGDR/preview","Biology":"https://drive.google.com/file/d/1zDC_CCliE6WdUuijG4NJxmGEgFm_IQ3m/preview","Computer":"https://docs.google.com/document/d/1D1ksUViso2E1rTb2keSX92Tj_gkqNqaf/preview","RAI":"#","Economics":"https://drive.google.com/file/d/11CjLIudX1KnqgHyleuyWIl_cGKrmKayg/preview","EVA":"https://drive.google.com/file/d/1MvQQCPwdChyZDZ275m76Sh4uf-r3FSx8/preview","PE":"https://drive.google.com/file/d/1QOOvyjqiIeySDEz717FXvVE4zU1UMPJf/preview"},
-            "FT": { "Bengali": "https://drive.google.com/file/d/1iarbhFXhAXL5t_5HT9DGBqPmpKVVd9R0/preview", "English Language": "https://drive.google.com/file/d/1RU16me8aOVjdUZUNdoflhYwmg6LQAGyt/preview", "English Literature": "https://drive.google.com/file/d/1DbBKeSIppwh78JehJq0sWq6r8RV6Ey3z/preview", "French": "https://drive.google.com/file/d/1432tVesY7o6CLB64kXcUk076LxqebOFA/preview", "German": "https://drive.google.com/file/d/1gHaj8z5AOkEEslLtxXoryflhSJKXvCZu/preview", "Hindi": "https://drive.google.com/file/d/1qVs46C9DDnls9sztPJ02IpoBiEh3S_dJ/preview", "History": "https://drive.google.com/file/d/1-P-X8L9jjgX_6-uEK2NAIV8cuiueGFxc/preview", "Geography": "https://drive.google.com/file/d/1OTZgvO-5B2aNQo92QIulvRKvaRMHUENC/preview", "Commerce": "https://drive.google.com/file/d/1hYIlzm7y8PS9cozjJfcRd1TKNe09Sivy/preview", "EVS": "https://drive.google.com/file/d/1mUFXBPa23TmIFdLJ2hBEenFbhqnrFWIk/preview", "Home Science": "https://drive.google.com/file/d/1Q4Bvv36UdNIVCMlEXRnvqoO8nHXhGLGg/preview", "Math": "https://drive.google.com/file/d/1oKFXEj0Cf9WJILuLxdhyGBfM3prUZyJh/preview", "Physics": "https://drive.google.com/file/d/1eB5EDhHYtx4JAqdRIDFRUYG7TG5-ZQ0R/preview", "Chemistry": "https://drive.google.com/file/d/154oho0qQ8AjJ2nBe9HHekvb9qQ4EZ4b2/preview", "Biology": "https://drive.google.com/file/d/1o8_gsyux77HnZUvisbKVYNinaoiSEyUX/preview", "Computer": "https://drive.google.com/file/d/1v9aQY1VJPQGtNoiM1CtfATZPoPi_k7o4/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1zROpJecB-Wovww4JokhJoMvktU69ArP2/preview", "EVA": "https://drive.google.com/file/d/1CLg76i8RiOoSNoNmdzB8brZTKxIJvlPw/preview", "PE": "https://drive.google.com/file/d/1kYnMM88OZthJbzHgy66G_t9e0Bcaaaxl/preview" }
-        },
-        "CL 10": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 11": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 12": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        }
-    },
-    "2021-22": {
-        "CL 9": {
-            "MT 1": { "Bengali": "https://drive.google.com/file/d/1NfeNNMIFH3IP-XgSk2YHrEtMPjcsK-Yl/preview", "English Language": "https://drive.google.com/file/d/1LDs5ZAQz5s5zksR2O5nUA3urKqrrYVD3/preview", "English Literature": "https://drive.google.com/file/d/1SY_04lbSEnIVdCKlM-CTr9XlsTIadEkM/preview", "French": "https://drive.google.com/file/d/1kcEcRR1gkdKgUwPFm0KIOzw_rtfuh7PE/preview", "German": "https://drive.google.com/file/d/1bXZOzzWotzCT179rIZxbnzVpkd4fRGjc/preview", "Hindi": "https://drive.google.com/file/d/1C56GtxOJRA8VPGkvbe8YqyM21PN1UyHq/preview", "History": "https://docs.google.com/document/d/11HHXidfE60sbhZO7VpiocHg8hS6ol--Y/preview", "Geography": "https://drive.google.com/file/d/18bIHFprMlT-muvdQD-0fcdNK3wjl8s68/preview", "Commerce": "https://drive.google.com/file/d/1GZOLl_1jI9_FYUhl2pE4lEKo7ywcNkpN/preview", "EVS": "https://drive.google.com/file/d/13YL22cjIdh9pJc3NXH2JydBDXty5mGWE/preview", "Home Science": "https://drive.google.com/file/d/1qc1g7Xi2oR2A4Zytz53_juiivf0mdOf-/preview", "Math": "https://drive.google.com/file/d/1qSKZ14-aonHReaViBJbg3OcZ5oOY_BUV/preview", "Physics": "https://drive.google.com/file/d/1zLyz6qrMhis4es20KcqsrNlD7h1bmcm6/preview", "Chemistry": "https://drive.google.com/file/d/15SY1AYbUbAo9QDgPUz7yecWq_5phgcnu/preview", "Biology": "https://drive.google.com/file/d/1S-E3wVK09D8BIvhDhldMnrAyxeTyWraq/preview", "Computer": "https://drive.google.com/file/d/1aowhaHWLMK1WHPYJ3wPUj6n1JjqRd6rZ/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1DsGo0CrGce-lQGpm58vHQAJz9c7VLake/preview", "EVA": "https://drive.google.com/file/d/1dA-KRNe7MSghTWgmvGBR5S4-4u0P5uB1/preview", "PE": "https://drive.google.com/file/d/1yhh7-Im4TEaTPVVjKR1dkqZVUtOIGBwC/preview" },
-            "MT 2": { "Bengali": "https://drive.google.com/file/d/1hkid5QWTZkdim524kN5iYQTg16Hdt3p9/preview", "English Language": "https://drive.google.com/file/d/1MtpPmTt2kfKKLopeRkldiSeC8cKMSYxi/preview", "English Literature": "https://drive.google.com/file/d/1WMG59BaT2DopyFpGzChtqi3NqNsdIfih/preview", "French": "https://drive.google.com/file/d/1X46ADDXb6C26M9TreBF1Jos-x9-rPaGZ/preview", "German": "https://drive.google.com/file/d/137lmNstBMrnWyunr3wMbkyAvQcKnh5w3/preview", "Hindi": "https://drive.google.com/file/d/15L613OoeSA6M59w9yfqeDKyOdIg-RVCO/preview", "History": "https://docs.google.com/document/d/1xCxdcVDPhTYA8Hg-zJWx06B6FcT7A7ND/preview", "Geography": "https://drive.google.com/file/d/1NhWS7VI-ocTmPMTYh2BZlEpaOSm8xwlT/preview", "Commerce": "https://drive.google.com/file/d/1wWT6yw5orxMt16ecn_Dxf5B9WsPal9nw/preview", "EVS": "https://drive.google.com/file/d/1fytG2EB6NO47chSY_sf1kuEJ0i5AVLCB/preview", "Home Science": "https://drive.google.com/file/d/1oMiKYdpA_3k-kYgMW8ZCg1Eh_hd6mVhF/preview", "Math": "https://drive.google.com/file/d/11D-n_SRuoSsM9B5Z4PJHYYQzmg2Ctywp/preview", "Physics": "https://drive.google.com/file/d/1J-yqacYjch2p44hBOXJBT5dA8tR4EAd7/preview", "Chemistry": "https://drive.google.com/file/d/1K0sgiSuFHcEK23MrJnQWm1Wrq_cQa_xN/preview", "Biology": "https://drive.google.com/file/d/1yzt7PwAf7BVo4B4DUHVsfi2aSB8MTqAf/preview", "Computer": "https://drive.google.com/file/d/1jMsR4BtFMuTyc1lZ9S1nuz8Kwr1QI2DZ/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1Ahe_YwZkqlHOBjMgM92cPoF_wovtGKVa/preview", "EVA": "https://drive.google.com/file/d/1aRG7UlnDiCiQh-jBtmmbbQJskpwik-9V/preview", "PE": "https://drive.google.com/file/d/1bOqP62HgiLr7KyzeY05ve2Kihgg2Qtxy/preview" },
-            "HY": {"Bengali I": "https://drive.google.com/file/d/1PVAJ5IrZgoLMqCkL7H5tpuDY5P3EGOAd/preview", "Bengali II": "https://drive.google.com/file/d/1c9DzHUy7Ifu-OZKBB67cudE3dxkY7I3C/preview", "English Language I": "https://drive.google.com/file/d/1KWnxXsqHzgbovap9billuDpK4Z6rCD50/preview", "English Language II": "https://drive.google.com/file/d/1M088r7m_5O4pYZznwsk44S5FxMBn1Rru/preview", "English Literature I": "#", "English Literature II": "https://drive.google.com/file/d/1VqyNEfTQ4W20UJ5abaS95NfVUBoWZWxZ/preview", "French I": "#", "French II": "#", "German I": "https://drive.google.com/file/d/1TINdyEt3ewbCtmezsY8KDU9a9i7rTlb7/preview", "German II": "https://drive.google.com/file/d/1T-vT9i21iIupTemNphGUswO9mqxKU5jq/preview", "Hindi": "https://drive.google.com/file/d/1lkNIyprpIwrsrtwtyzIR6wXYu6vX-7YV/preview", "History": "https://drive.google.com/file/d/1rC13XWvgZih5nySm8EPvJ16HOmt0LCAc/preview", "Geography I": "https://drive.google.com/file/d/1Bs-cQeZEHER2jcNyg7xkusXaE3khgZjQ/preview", "Geography II": "https://drive.google.com/file/d/1HBZJQNELdgDd3WttNGTnhAp6U2-pRysJ/preview", "Commerce I": "https://drive.google.com/file/d/1bD2OphMehl0mI6DLYreOcuSym4AduHrU/preview", "Commerce II": "https://drive.google.com/file/d/1qhu_CAYNaylTa5L71dO-2RBaMdFBjDUO/preview", "EVS I": "https://drive.google.com/file/d/1sg1aVS1AT8XohhSPFuelHVCLJznxI--9/preview", "EVS II": "https://drive.google.com/file/d/1_a2lzByB7MPinf-sJoAbs1FgG-n8YNn6/preview", "Home Science I": "https://drive.google.com/file/d/1dynutnlAVTfl_sjW6QU4hR-dGbRsZ9sW/preview", "Home Science II": "https://drive.google.com/file/d/1e8epIWR7bWftJLXjySxRBxFPs8-0m5SX/preview", "Math I": "https://docs.google.com/document/d/1v89xOIhUKgZ-lYBgikdpIX73e2O7SHyS/preview", "Math II": "https://drive.google.com/file/d/1obEMhFRsAD6F7TVLkrU1sPlRzq5JKuXw/preview", "Physics I": "https://drive.google.com/file/d/1NOZ-Hv8MiP-aGr2t69fAiZMKJ5GlBIs7/preview", "Physics II": "https://drive.google.com/file/d/1CZwbplozNkw8ybYI1AcjuggEH1-h4Mga/preview", "Chemistry I": "https://drive.google.com/file/d/1GKKh2CkyoAt8PIh7hzsX9UwZ1dYLYBb0/preview", "Chemistry II": "https://drive.google.com/file/d/1o52aAON2XDSR8WbjYV2Yzi5bJPjN-pGx/preview", "Biology I": "https://drive.google.com/file/d/1spgMMNAAWpFSEHVVE76oI1uRkBC7_R9t/preview", "Biology II": "https://drive.google.com/file/d/1oVNvMpR-csqaJfGHxTinuLCl0UFtT4sd/preview", "Computer I": "https://drive.google.com/file/d/1Sl4XRnvgVt9MsRWYtT7XflXZhx2D--QN/preview", "Computer II": "https://drive.google.com/file/d/1WePyfXx05BOi410J_tvFpiAZU5Md5X5r/preview", "Economics I": "https://drive.google.com/file/d/1LkPLzX4BXZfkcLM7Lulr1knb8CP5xDTV/preview", "Economics II": "https://drive.google.com/file/d/1IcaZZyQBZe_DagaTAXc4Ah7cxyWCeMgR/preview", "EVA I": "https://drive.google.com/file/d/1rZKySw5CheCUOi2FcHS4qSchI4WP0tlM/preview", "EVA II": "https://drive.google.com/file/d/1yyyF5wScLKuvj4Buk9MQwoOu8Hczud1P/preview", "PE I": "https://drive.google.com/file/d/1A_piB4P5KCxFBdqPOz3AJVNKyw-186bz/preview", "PE II": "https://drive.google.com/file/d/17DQowiuoLcz3mUF3aeGpeHZr5aUwt4OA/preview"},
-            "FT": {"Bengali": "https://drive.google.com/file/d/1iiopQI3krzojjgT7LRFL0oZE4pAq4DVA/preview","English Language": "https://drive.google.com/file/d/1Pn2-aHeCZK7ybPUs3YUUl_bdmCoE8ZE5/preview","English Literature": "https://drive.google.com/file/d/19VNYTeM1GPqgcJuxK_Mg2LeBJ7p3g6sw/preview","French": "https://drive.google.com/file/d/1EiRI9UZ8g_R3oqtSzaBh7BeBv_Q_qUNW/preview","German": "https://drive.google.com/file/d/16w96HNz6tQiCOAacjAAe0_vVz18ljQzs/preview","Hindi": "https://drive.google.com/file/d/1Me8Nx56xVCHGxlTzYMJ8A5Zkb6eWaVIX/preview","History": "https://drive.google.com/file/d/1apOKVKNqi0eJqzsCffH7PQglg0ZeJ4Bg/preview","Geography": "https://drive.google.com/file/d/1-mgqNpS3-Xl0wKCWLs_AJWFawcvxLwwU/preview","Commerce": "https://drive.google.com/file/d/1Iv3LDXI1VFyE8HEAOtnKOtK2ch2jS96n/preview","EVS": "https://drive.google.com/file/d/1iATAngU9sVJ11RRnubf4TA_awgLkbmNe/preview","Home Science": "https://drive.google.com/file/d/1HiKp8Uv_lYbhjTlI0YsszDMjVcrqCxmE/preview","Math": "https://drive.google.com/file/d/1Ipszd_VzJN4xQrBt724JNx31anCONvaP/preview","Physics": "https://drive.google.com/file/d/1Jc07C1xZH95nkxuHtUmtKnZ0vvgukz0y/preview","Chemistry": "https://drive.google.com/file/d/1sF9BqJB2jZ0x2k_A5fDlZ46R7fKqaj9T/preview","Biology": "https://drive.google.com/file/d/1dLMr2PLDJ9sFWFfWcfMI8jNGKaGysLxl/preview","Computer": "https://drive.google.com/file/d/1UW6LkCcliw4om2Gh0e2Pqsp_3mueSx8g/preview","RAI": "#","Economics": "https://drive.google.com/file/d/1Y-1WoP0Y3i8JfmXZODZbFQeXqCCjLfuk/preview","EVA": "https://drive.google.com/file/d/1husCrl4Mdgo4n85TGo2rt5bdQDA5915_/preview","PE": "https://drive.google.com/file/d/1mw5aXAhVmcCywBuXfCkk8WyRfRssecNJ/preview"}
-        },
-        "CL 10": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 11": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 12": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        }
-    },
-    "2020-21": {
-        "CL 9": {
-            "MT 1": { "Bengali I": "https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1yPmBziwEl6u0Y608jliQtkKwlmuO9S56/preview", "Bengali II":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1M84nB9dLJm2HcQ2h_N6iGb2lIYH8Xkq8/preview", "English Language":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1Mg0EUnUjfQ_gSn4GxJWI4SnMSFgn07O0/preview", "English Literature":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/12kN3EzSOXtlHpufWHYvguFQoj91PvDES/preview", "French I":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1Gy9G-ZX1ogWwvPgm6fU4TuSFme5AnO0w/edit/preview", "French II":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1F3RIfH0LaXJxI80lRUtsptdzYiEgxiW1/edit/preview", "German I":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1OzQg7Pc6i1h153mrdZbAgrUhQJ4xpRSC/edit/preview", "German II":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1Q9WhEIYn3dnr0XxH7xvfItdT4p-NQN9d/edit/preview", "Hindi":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1UFrmFdZgirh-OsaJ7dPmYTuG3G1foHLA/preview", "History":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1U0luNmjh217mdJtSzxpIc64CimwErvYH/preview", "Geography":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1xjIIZEyd7NUoOo9pmItzMx0R7rrgWXu-/preview", "Commerce I":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1AtBvLnk5TXnpBp2kTvb99dsHzZOSQ-Ga/preview", "Commerce II":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1T_K32oS6qXhjnWlben3aRkGx3TWRWICD/preview", "EVS":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/13nhSn4gbvv1jm44vqh7vBb5HJpBYZJE6/preview", "Home Science":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1NjTswLzsPAyfeqt0WqfABV59hQoMf1jf/edit/preview", "Math":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1hMM5PmN0nDtkyiFlcNgQyPuOakZ9XxG8/preview", "Physics":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1lmN49BbfKyE_EMfRuyfAvDBlyE5ipu0z/edit/preview", "Chemistry":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/176tTWRW80m9RAn1hEYldaBXpUba_5zRa/preview", "Biology I":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/15pjyyUgyHgKTtvr39rypoY5LFVciTSgT/preview", "Biology II":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/168xg6gWbyt6iNJWEgB8WbNH_90U4Xzu9/preview", "Computer":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1J7tq_aXiT7JmFOrJsaJl0f_3c_SgfREN/edit/preview", "RAI":"#","Economics":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/1zOoTEmA5SaTLmORh-y0nbBk6o87mpWko/preview", "EVA":"https://docs.google.com/gview?embedded=true&url=https://drive.google.com/file/d/14VCRZHqaNPEBT9Ve2KGV-qJrM3oe7OOQ/preview", "PE":"https://docs.google.com/gview?embedded=true&url=https://docs.google.com/document/d/1ItBqBGcQHsez_xWvYC2j8KUWDBvhJGZt/edit/preview"},
-            "MT 2": { "Bengali": "https://drive.google.com/file/d/14mY-LrRpFrN8o_U_RMbvsDS_zrosJPXJ/preview", "English Language": "https://drive.google.com/file/d/1kA5oesYn9hGJotIIwzqaJafrk2tPJVic/preview", "English Literature": "https://drive.google.com/file/d/1mAOpJs7sLTfuxZmOrbrpXx8H0Oqznmvp/preview", "French": "https://drive.google.com/file/d/1tX1d3MF_sFmnIYERnzlsJJfIz0AIPV2o/preview", "German": "https://drive.google.com/file/d/1KilyFCKUsSV1eoH3CtEhfvci3xlruG98/preview", "Hindi": "#", "History": "https://drive.google.com/file/d/1dxN3AyUeBq_-o9f7B1G3Z8OOge4YCApE/preview", "Geography": "https://drive.google.com/file/d/1bmqhOyhTRgNHs3gh5EModQNs3-c5Pddi/preview", "Commerce": "https://drive.google.com/file/d/1bdw9KrohVVAyNhbW_PJ9QNhH-pr8OP0e/preview", "EVS": "https://drive.google.com/file/d/1Wvnmc0hk7GidsQf2DxS59PjGAORf4rKo/preview", "Home Science": "https://drive.google.com/file/d/1bgdSvoaAsxpgE6Ua6IWNtdWuqtMjrk5N/preview", "Math": "https://drive.google.com/file/d/1UzgpSnPUVi_c3Q2TfuDvMb0ewbDcL7NI/preview", "Physics": "https://drive.google.com/file/d/1snpjk6pH4-bz-WEaWwmHPWIlc2a5vdb_/preview", "Chemistry": "https://drive.google.com/file/d/19qecxzeTAt8tWE5DPSEzs9XoW_L6UUTa/preview", "Biology": "https://drive.google.com/file/d/1pzo7bjZy3ZqfV6acPBH_ahcs0k6RexRY/preview", "Computer": "https://drive.google.com/file/d/1jC8LCRPtYnssy8yBQ-6d51e8A3HkP2Xm/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1gPOYcWKVWMI8V1PDV6Os54ffwkR8rZCl/preview", "EVA": "https://drive.google.com/file/d/1CMKp45nCykBp-NupHZanvmSHKqnJHCB3/preview", "PE": "https://drive.google.com/file/d/1gg3xi5Wn6RkmTQEUerdhtbYoB2IPzJZ0/preview" },
-            "HY": { "Bengali I":"https://drive.google.com/file/d/1xZpPngzxqteXTcAKUCuQL78AsB474d-B/preview","Bengali II":"https://drive.google.com/file/d/1RNpsilUMUAYtNHkWca4dWDT_uZrAESMg/preview","English Language":"https://drive.google.com/file/d/14yFynYabbJaqniTSP7ZWTgSRQmxcRs56/preview","English Literature I":"https://drive.google.com/file/d/1mBFqsEurJxICr74akHQroeKBdSJoMyyM/preview","English Literature II":"https://drive.google.com/file/d/1JIOoF7evwYgxkHqPxXbwY9nVByPGczPO/preview","French":"https://docs.google.com/document/d/1faITvq7LN04keCwsq3Vz8DaBqOH3ILwp/preview","German":"https://drive.google.com/file/d/1slV1GjX2no6s67V-ZtGfqPEkpYAXmcYi/preview","Hindi":"https://drive.google.com/file/d/1WEpRiaSi546jPL5cyfoLc4YVmG5HExyE/preview","History":"https://drive.google.com/file/d/1f8zrAZYi3ESTm-PIOfVv_a2OuyxWX8lY/preview","Geography":"https://drive.google.com/file/d/13cvA5Ql--mq4Y7qCfwuctVkX2iNJOI9_/preview","Commerce I":"https://drive.google.com/file/d/1IeZ_HN-_0EnIdwlS12UgqManmt_kV0Lz/preview","Commerce II":"https://drive.google.com/file/d/1642aWaaHtIxYHxQkwQbdi_TzxRzgNUSh/preview","EVS":"https://drive.google.com/file/d/15DVihC3p_D72u2cfPfoFgi7i3My9xYG9/preview","Home Science":"https://drive.google.com/file/d/1OMSt0630fOvLwehlROlfEpOi34LWY5vK/preview","Math":"https://drive.google.com/file/d/1MxJQZgR32_d7oYiaISPscLCDK8E3R7Ls/preview","Physics":"https://drive.google.com/file/d/1e9EEZYidTghMRYSNBf_8eWQlQETYSz5V/preview","Chemistry":"https://drive.google.com/file/d/1nQ3KaX9klAySq7JdRqw2_3-P32Pgn66F/preview","Biology":"https://drive.google.com/file/d/1fsanciNj6INEUqWyHjDKQUvrqV629rWa/preview","Computer":"https://drive.google.com/file/d/1GWEorPUZ-FQZoA4EtYU3uX6Avht3Erk1/preview","RAI":"#","Economics":"#","EVA":"https://drive.google.com/file/d/1XrNv_TjKLxAKbp99-AfxhwMabVqoKRcj/preview","PE":"https://drive.google.com/file/d/1ui-11_IOatXKW7im1qXDgkzyjNVgMCp8/preview"},
-            "FT": {"Bengali": "https://drive.google.com/file/d/1ElmIlCN-DPjQbEDG9SDeWfyc67jOvOpn/preview", "English Language I": "https://drive.google.com/file/d/1shtifFOaNyUjVwWqVjh7VytrOy3vcjOa/preview", "English Language II": "https://drive.google.com/file/d/117aPZ8J-P9cc2-FGr7Ao3pC5n2dibD85/preview", "English Literature I": "https://drive.google.com/file/d/1kDUbP0QggCPWPkBaJy4IzHgXU4Yjd_tC/preview", "English Literature II": "https://drive.google.com/file/d/14oduNsq9XhiBlrUSEYfukq4JtUZxqo0U/preview", "French ": "https://drive.google.com/file/d/1ggr0MwuJGp1wx17fdiSlJWgw29gn-iDA/preview", "German": "https://drive.google.com/file/d/1NiSTCnlvfn0OB5w9C14nYXJqi_QMpmrg/preview", "Hindi": "https://drive.google.com/file/d/1HLaF5gqcrZdA5vn9a276hueu-SvlpwpY/preview", "History I": "https://drive.google.com/file/d/1ISVI2jZerEA1ThhBomkY8ALxTKy4ItCC/preview", "History II": "https://drive.google.com/file/d/1xVdHMXmvVvF7B2Y8JAR92Uh0Gc9VZOTA/preview", "Geography": "https://drive.google.com/file/d/1VYggaky6JNinWkP0DigCcuvbmLznC1UM/preview", "Commerce": "https://docs.google.com/document/d/1GKgCSj_Ep56E6Cs34DF43wWra-MZc-uJ/preview", "EVS": "https://drive.google.com/file/d/16ToWQl4YER37Ym-mixFrm8aB9MbVGpwO/preview", "Home Science": "https://drive.google.com/file/d/1ahdis1tz7r8p6zUh3Tcwjz4zjIqYDLlY/preview", "Math": "https://drive.google.com/file/d/1Mju9pnATL9Mw6qI53Hv0QO_InW6sid5X/preview", "Physics I": "https://drive.google.com/file/d/1YMK-UvuOKzeER5BxD52pgzkpCUdWuQPB/preview", "Physics II": "https://drive.google.com/file/d/1dKkqLfMH-67Z0_cS_n2oR7rlzKQvl1Eb/preview", "Chemistry": "https://drive.google.com/file/d/1he9dmLXmhiCEWTCqDjbuf_Z83uXbL51N/preview", "Biology": "https://drive.google.com/file/d/1us5APdxt9NQ3nVRCaxNAv5sseLEGZXCv/preview", "Computer": "https://drive.google.com/file/d/1qFBmJoqjjBDVWm1RN6_3BfbaCgVrjRBs/preview", "RAI": "#", "Economics": "https://drive.google.com/file/d/1kuZ2b2I1Q-WYOW2xmKGhMWVAoXtHMZhw/preview", "EVA": "https://drive.google.com/file/d/1SmRaZbbVdK5CJR5WmjWiWRgpR7HNwNIx/preview", "PE": "https://drive.google.com/file/d/19CwkqRgnPadYqSU49dSg6AzC4SKlR687/preview"}
-        },
-        "CL 10": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 11": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        },
-        "CL 12": {
-            "MT 1": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "MT 2": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "HY": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" },
-            "FT": { "Bengali": "#", "English Language": "#", "English Literature": "#", "French": "#", "German": "#", "Hindi": "#", "History": "#", "Geography": "#", "Commerce": "#", "EVS": "#", "Home Science": "#", "Math": "#", "Physics": "#", "Chemistry": "#", "Biology": "#", "Computer": "#", "RAI": "#", "Economics": "#", "EVA": "#", "PE": "#" }
-        }
-    }
-};
 
 function loadFlashcardDecks() {
   flashcardDecks = JSON.parse(localStorage.getItem('questionary-flashcards') || '[]');
@@ -1618,18 +4250,50 @@ function saveSession() {
     return;
   }
   
-  studySessions.push({
+  const session = {
     id: Date.now().toString(),
     subject,
     date,
     time: time || '09:00'
-  });
+  };
+  
+  studySessions.push(session);
+  
+  // Schedule notification for this session
+  scheduleSessionNotification(session);
   
   saveStudySessions();
   renderCalendar();
   renderSessions();
   modal?.classList.remove('active');
   showNotification('Session added!', 'success');
+}
+
+function scheduleSessionNotification(session) {
+  const sessionDateTime = new Date(`${session.date}T${session.time}`);
+  const now = new Date();
+  
+  if (sessionDateTime > now) {
+    const delay = sessionDateTime - now;
+    
+    setTimeout(() => {
+      // Play alarm sound
+      if (typeof window.playAlarmSound === 'function') {
+        window.playAlarmSound();
+      }
+      
+      // Show notification
+      showNotification(`📚 Time for: ${session.subject}`, 'info');
+      
+      // Browser notification
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Questionary - Study Session', {
+          body: `Time for: ${session.subject}`,
+          icon: 'assets/logo.png'
+        });
+      }
+    }, delay);
+  }
 }
 
 function deleteSession(sessionId) {
@@ -1655,7 +4319,7 @@ function showDaySessions(dateStr) {
     showNotification(`No sessions on ${dateStr}`, 'info');
   } else {
     const list = sessionsOnDay.map(s => `• ${s.subject} at ${s.time}`).join('\n');
-    alert(`Sessions on ${dateStr}:\n\n${list}`);
+    showInfoDialog(list, { title: `Sessions on ${dateStr}`, type: 'info' });
   }
 }
 
@@ -1685,7 +4349,21 @@ window.deleteSession = deleteSession;
 window.showDaySessions = showDaySessions;
 
 
-document.addEventListener('DOMContentLoaded', async () => {
+
+async function initializeApp() {
+  console.log('[App] Starting initialization...');
+  
+  
+  if (window.__TAURI__ && window.__TAURI__.window) {
+    try {
+      const currentWindow = window.__TAURI__.window.getCurrentWindow();
+      await currentWindow.show();
+      await currentWindow.setFocus();
+      console.log('[App] Window shown');
+    } catch (e) {
+      console.log('Could not show window:', e);
+    }
+  }
   
   await initializeFavorites();
   
@@ -1727,11 +4405,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
-      const currentTheme = document.documentElement.getAttribute('data-theme');
-      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', newTheme);
-      localStorage.setItem('theme', newTheme);
-      updateThemeIcon(newTheme);
+      const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+      
+      if (typeof window.setTheme === 'function') {
+        window.setTheme(newTheme);
+      } else {
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        updateThemeIcon(newTheme);
+      }
     });
   }
   
@@ -1771,6 +4454,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   initializeKeyboardNavigation();
   loadDocuments();
   trackDailyAccess();
+  
+  // Restore last location after a short delay to ensure everything is loaded
+  setTimeout(() => {
+    restoreLastLocation();
+  }, 100);
+  
+  
+  if (window.contentUpdateSystem && typeof window.contentUpdateSystem.init === 'function') {
+    window.contentUpdateSystem.init();
+  }
+  
   window.addEventListener('beforeunload', () => {
     saveUserPreferences();
   });
@@ -1778,8 +4472,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('error', e => {
     console.error('Application error:', e.error);
   });
+  
+  // Expose documents and renderTiles for PDF Library integration
+  window.documents = documents;
+  window.renderTiles = renderTiles;
+  window.getCurrentDocumentsLevel = getCurrentDocumentsLevel;
+  
+  // Load custom documents again in case features.js loaded after initial load
+  if (typeof window.loadCustomDocuments === 'function') {
+    window.loadCustomDocuments();
+  }
+  
+  // Render document tiles now that everything is loaded
+  renderTiles(getCurrentDocumentsLevel());
+  
   console.log('Questionary application initialized successfully');
-});
+}
+
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeApp);
+} else {
+  
+  initializeApp();
+}
 
 function updateThemeIcon(theme) {
   const themeIcon = document.getElementById('themeIcon');
@@ -1835,6 +4551,8 @@ function handleLogin(e) {
 }
 
 function checkSavedLogin() {
+  const loadingOverlay = document.getElementById('loadingOverlay');
+  
   const savedLogin = localStorage.getItem('revamp-dpsnt-remember');
   if (savedLogin) {
     try {
@@ -1859,6 +4577,9 @@ function checkSavedLogin() {
       sessionStorage.removeItem('revamp-dpsnt-session');
     }
   }
+  
+  
+  if (loadingOverlay) loadingOverlay.classList.remove('active');
   return false;
 }
 
@@ -1872,6 +4593,8 @@ function initializeNavigation() {
   const flashcardsNav = document.getElementById('flashcardsNav');
   const notesNav = document.getElementById('notesNav');
   const progressNav = document.getElementById('progressNav');
+  const remindersNav = document.getElementById('remindersNav');
+  const settingsNav = document.getElementById('settingsNav');
   const mobileMenuToggle = document.getElementById('mobileMenuToggle');
   const navLinks = document.getElementById('navLinks');
   const backBtn = document.getElementById('backBtn');
@@ -1908,7 +4631,7 @@ function initializeNavigation() {
   
   
   const closeMenuOnClick = () => {
-    if (navLinks && window.innerWidth <= 768) {
+        if (navLinks && window.innerWidth <= 768) {
       navLinks.classList.remove('active');
       const icon = mobileMenuToggle?.querySelector('i');
       if (icon) {
@@ -1916,12 +4639,15 @@ function initializeNavigation() {
         icon.classList.remove('fa-times');
       }
     }
+        if (document.body.classList.contains('vertical-navbar-mode')) {
+      closeSidebar();
+    }
   };
   
   homeNav && homeNav.addEventListener('click', () => {
     showView('home');
     path = [];
-    renderTiles(documents);
+    renderTiles(window.documents || documents);
     updateBreadcrumb();
     setActiveNav('homeNav');
     closeMenuOnClick();
@@ -1961,11 +4687,41 @@ function initializeNavigation() {
     showView('notes');
     setActiveNav('notesNav');
     closeMenuOnClick();
+    if (typeof renderVoiceNotesGrid === 'function') renderVoiceNotesGrid();
+  });
+  
+  // Tags navigation
+  const tagsNav = document.getElementById('tagsNav');
+  tagsNav && tagsNav.addEventListener('click', () => {
+    showView('tags');
+    setActiveNav('tagsNav');
+    closeMenuOnClick();
+    if (typeof renderTagsMain === 'function') renderTagsMain();
+    if (typeof renderTaggedItems === 'function') renderTaggedItems();
   });
   
   progressNav && progressNav.addEventListener('click', () => {
     showView('progress');
     setActiveNav('progressNav');
+    closeMenuOnClick();
+  });
+
+  remindersNav && remindersNav.addEventListener('click', () => {
+    showView('reminders');
+    setActiveNav('remindersNav');
+    closeMenuOnClick();
+  });
+
+  const studyRoomNav = document.getElementById('studyRoomNav');
+  studyRoomNav && studyRoomNav.addEventListener('click', () => {
+    showView('studyRoom');
+    setActiveNav('studyRoomNav');
+    closeMenuOnClick();
+  });
+
+  settingsNav && settingsNav.addEventListener('click', () => {
+    showView('settings');
+    setActiveNav('settingsNav');
     closeMenuOnClick();
   });
 }
@@ -2048,7 +4804,7 @@ function updateAccessibilityToggleStates() {
 function initializeKeyboardNavigation() {
   document.addEventListener('keydown', (e) => {
     
-    const isInputFocused = e.target.closest('input, textarea');
+    const isInputFocused = e.target.closest('input, textarea, [contenteditable]');
     
     if (e.key === 'Escape') {
       
@@ -2066,15 +4822,9 @@ function initializeKeyboardNavigation() {
       }
       
       
-      const pdfViewer = document.getElementById('pdfViewer');
-      if (pdfViewer && pdfViewer.style.display === 'block') {
-        pdfViewer.style.display = 'none';
-        pdfViewer.src = '';
-        const tilesSection = document.getElementById('tilesSection');
-        const dashboardHeader = document.querySelector('.dashboard-header');
-        tilesSection && (tilesSection.style.display = 'block');
-        dashboardHeader && (dashboardHeader.style.display = 'flex');
-        hideTimerCompletely();
+      const pdfViewerContainer = document.getElementById('pdfViewerContainer');
+      if (pdfViewerContainer && pdfViewerContainer.style.display !== 'none') {
+        closePDF();
         return;
       }
       
@@ -2088,57 +4838,52 @@ function initializeKeyboardNavigation() {
       if (currentView !== 'home') {
         showView('home');
         path = [];
-        renderTiles(documents);
+        renderTiles(window.documents || documents);
         updateBreadcrumb();
         setActiveNav('homeNav');
         return;
       }
     }
     
-    if (e.key === '/' && !isInputFocused) {
+    if (!isInputFocused && keybindMatches(e, 'focusSearch')) {
       e.preventDefault();
       document.getElementById('globalSearch')?.focus();
     }
     
-    if (e.key === 'Backspace' && !isInputFocused && path.length > 0) {
+    if (!isInputFocused && keybindMatches(e, 'goBack') && path.length > 0) {
       handleBackButton();
     }
     
     
-    if (e.altKey && e.key === 'ArrowLeft' && !isInputFocused) {
+    if (!isInputFocused && keybindMatches(e, 'navBack')) {
       e.preventDefault();
-      const pdfViewer = document.getElementById('pdfViewer');
-      if (pdfViewer && pdfViewer.style.display === 'block') {
-        pdfViewer.style.display = 'none';
-        pdfViewer.src = '';
-        const tilesSection = document.getElementById('tilesSection');
-        const dashboardHeader = document.querySelector('.dashboard-header');
-        tilesSection && (tilesSection.style.display = 'block');
-        dashboardHeader && (dashboardHeader.style.display = 'flex');
-        hideTimerCompletely();
+      const pdfViewerContainer = document.getElementById('pdfViewerContainer');
+      if (pdfViewerContainer && pdfViewerContainer.style.display !== 'none') {
+        closePDF();
       } else if (path.length > 0) {
         handleBackButton();
       } else if (currentView !== 'home') {
         showView('home');
         path = [];
-        renderTiles(documents);
+        renderTiles(window.documents || documents);
         updateBreadcrumb();
         setActiveNav('homeNav');
       }
     }
     
     
-    if (e.altKey && e.key === 'Home' && !isInputFocused) {
+    if (!isInputFocused && keybindMatches(e, 'goHome')) {
       e.preventDefault();
-      const pdfViewer = document.getElementById('pdfViewer');
-      if (pdfViewer) {
-        pdfViewer.style.display = 'none';
-        pdfViewer.src = '';
+      const pdfViewerContainer = document.getElementById('pdfViewerContainer');
+      if (pdfViewerContainer) {
+        pdfViewerContainer.style.display = 'none';
+        const pdfViewer = document.getElementById('pdfViewer');
+        if (pdfViewer) { pdfViewer.classList.remove('active'); pdfViewer.src = ''; }
       }
       hideTimerCompletely();
       showView('home');
       path = [];
-      renderTiles(documents);
+      renderTiles(window.documents || documents);
       updateBreadcrumb();
       setActiveNav('homeNav');
     }
@@ -2146,9 +4891,115 @@ function initializeKeyboardNavigation() {
 }
 
 
+// Helper function to show and populate home tags panels
+function showHomeTagsPanels() {
+  const homeTagsSection = document.getElementById('homeTagsSection');
+  const homeTaggedItemsSection = document.getElementById('homeTaggedItemsSection');
+  
+  if (homeTagsSection) {
+    homeTagsSection.style.display = 'block';
+    renderHomeTagsList();
+  }
+  if (homeTaggedItemsSection) {
+    homeTaggedItemsSection.style.display = 'block';
+    renderHomeTaggedItemsList();
+  }
+}
+
+// Hide home tags panels when navigating away
+function hideHomeTagsPanels() {
+  const homeTagsSection = document.getElementById('homeTagsSection');
+  const homeTaggedItemsSection = document.getElementById('homeTaggedItemsSection');
+  
+  if (homeTagsSection) homeTagsSection.style.display = 'none';
+  if (homeTaggedItemsSection) homeTaggedItemsSection.style.display = 'none';
+}
+
+// Render tags list on home page
+function renderHomeTagsList() {
+  const container = document.getElementById('homeTagsList');
+  if (!container) return;
+  
+  const tags = JSON.parse(localStorage.getItem('questionary-tags') || '[]');
+  const itemTags = JSON.parse(localStorage.getItem('questionary-item-tags') || '{}');
+  
+  if (tags.length === 0) {
+    container.innerHTML = '<span class="empty-hint">No tags created yet</span>';
+    return;
+  }
+  
+  container.innerHTML = tags.map(tag => {
+    const count = Object.values(itemTags).filter(arr => arr.includes(tag.id)).length;
+    return `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 8px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.15); background: ${tag.color}; color: white;" onclick="filterByTagHome('${tag.id}')">${escapeHtml(tag.name)} <small style="opacity: 0.85;">(${count})</small></span>`;
+  }).join('');
+}
+
+// Render tagged items list on home page
+function renderHomeTaggedItemsList() {
+  const container = document.getElementById('homeTaggedItemsList');
+  if (!container) return;
+  
+  const tags = JSON.parse(localStorage.getItem('questionary-tags') || '[]');
+  const itemTags = JSON.parse(localStorage.getItem('questionary-item-tags') || '{}');
+  
+  // Filter to only items that have at least one valid (existing) tag
+  const items = Object.entries(itemTags)
+    .filter(([_, tagIds]) => tagIds.length > 0 && tagIds.some(tid => tags.find(t => t.id === tid)))
+    .slice(0, 8);
+  
+  if (items.length === 0) {
+    container.innerHTML = '<span class="empty-hint">No tagged items yet</span>';
+    return;
+  }
+  
+  container.innerHTML = items.map(([itemId, tagIds]) => {
+    const tagBadges = tagIds.slice(0, 2).map(tid => {
+      const tag = tags.find(t => t.id === tid);
+      return tag ? `<span class="tag-mini" style="background: ${tag.color}">${escapeHtml(tag.name)}</span>` : '';
+    }).join(' ');
+    
+    // Parse itemId to get display name and type
+    const isFolder = itemId.startsWith('folder_');
+    const isDoc = itemId.startsWith('doc_');
+    let displayName = itemId;
+    let icon = 'fa-file';
+    
+    if (isFolder) {
+      displayName = itemId.replace('folder_', '').split('/').pop();
+      icon = 'fa-folder';
+    } else if (isDoc) {
+      displayName = itemId.replace('doc_', '').split('/').pop();
+      icon = 'fa-file-pdf';
+    }
+    
+    return `<div class="home-tagged-item" onclick="navigateToTaggedItem('${escapeHtml(itemId)}')" style="cursor:pointer;"><span><i class="fas ${icon}" style="color: var(--primary-color); margin-right: 0.4rem;"></i>${escapeHtml(displayName)}</span><span>${tagBadges}</span></div>`;
+  }).join('');
+}
+
+// Filter by tag from home
+function filterByTagHome(tagId) {
+  showView('tags');
+  if (typeof window.filterByTag === 'function') {
+    window.filterByTag(tagId);
+  }
+}
+
+// Expose home tag renderers globally so features.js can call them after tag creation/deletion
+window.renderHomeTagsList = renderHomeTagsList;
+window.renderHomeTaggedItemsList = renderHomeTaggedItemsList;
+window.showView = showView;
+
+
 function showView(viewName) {
   currentView = viewName;
   
+  // Save location when view changes
+  saveUserPreferences();
+  
+  const pdfViewerContainer = document.getElementById('pdfViewerContainer');
+  if (pdfViewerContainer && pdfViewerContainer.style.display !== 'none') {
+    if (typeof closePDF === 'function') closePDF();
+  }
   
   const tilesSection = document.getElementById('tilesSection');
   const favoritesSection = document.getElementById('favoritesSection');
@@ -2158,6 +5009,11 @@ function showView(viewName) {
   const flashcardsSection = document.getElementById('flashcardsSection');
   const notesSection = document.getElementById('notesSection');
   const progressSection = document.getElementById('progressSection');
+  const remindersSection = document.getElementById('remindersSection');
+  const settingsSection = document.getElementById('settingsSection');
+  const tagsSection = document.getElementById('tagsSection');
+  const importedSection = document.getElementById('importedSection');
+  const studyRoomSection = document.getElementById('studyRoomSection');
   const searchResults = document.getElementById('searchResults');
   const dashboardHeader = document.querySelector('.dashboard-header');
   const breadcrumb = document.getElementById('breadcrumb');
@@ -2166,20 +5022,36 @@ function showView(viewName) {
   
   
   const allSections = [tilesSection, favoritesSection, recentSection, analyticsSection, 
-                       plannerSection, flashcardsSection, notesSection, progressSection];
+                       plannerSection, flashcardsSection, notesSection, progressSection,
+                       remindersSection, settingsSection, tagsSection, importedSection, studyRoomSection];
   allSections.forEach(section => {
     if (section) section.style.display = 'none';
   });
   if (searchResults) searchResults.style.display = 'none';
-  if (pdfViewer) pdfViewer.style.display = 'none';
+  if (pdfViewerContainer) pdfViewerContainer.style.display = 'none';
+  if (pdfViewer) { pdfViewer.classList.remove('active'); pdfViewer.src = ''; }
+  // Always hide home tag panels first; only home case re-shows them
+  hideHomeTagsPanels();
   
   
   switch(viewName) {
     case 'home':
       if (tilesSection) tilesSection.style.display = 'block';
+      const tc = document.getElementById('tilesContainer');
+      if (tc) {
+        const isListView = tc.classList.contains('list-view');
+        tc.style.display = isListView ? 'flex' : 'grid';
+      }
+      const sh = document.querySelector('#tilesSection .section-header');
+      if (sh) sh.style.display = 'flex';
+      
+      if (importedSection) importedSection.style.display = 'block';
       if (dashboardHeader) dashboardHeader.style.display = 'flex';
       if (breadcrumb) breadcrumb.style.display = 'flex';
       if (backBtn) backBtn.style.display = path.length > 0 ? 'flex' : 'none';
+      if (typeof window.renderLibrary === 'function') window.renderLibrary();
+      // Render document tiles
+      renderTiles(getCurrentDocumentsLevel());
       break;
     case 'favorites':
       if (favoritesSection) favoritesSection.style.display = 'block';
@@ -2231,10 +5103,41 @@ function showView(viewName) {
       if (backBtn) backBtn.style.display = 'none';
       updateProgressDisplay();
       break;
+    case 'reminders':
+      if (remindersSection) remindersSection.style.display = 'block';
+      if (dashboardHeader) dashboardHeader.style.display = 'none';
+      if (breadcrumb) breadcrumb.style.display = 'none';
+      if (backBtn) backBtn.style.display = 'none';
+      if (typeof window.renderReminders === 'function') window.renderReminders();
+      break;
+    case 'settings':
+      if (settingsSection) settingsSection.style.display = 'block';
+      if (dashboardHeader) dashboardHeader.style.display = 'none';
+      if (breadcrumb) breadcrumb.style.display = 'none';
+      if (backBtn) backBtn.style.display = 'none';
+      if (typeof window.renderSettings === 'function') window.renderSettings();
+      break;
+    case 'studyRoom':
+      if (studyRoomSection) studyRoomSection.style.display = 'block';
+      if (dashboardHeader) dashboardHeader.style.display = 'none';
+      if (breadcrumb) breadcrumb.style.display = 'none';
+      if (backBtn) backBtn.style.display = 'none';
+      if (typeof window.renderStudyRoom === 'function') window.renderStudyRoom();
+      break;
+    case 'tags':
+      if (tagsSection) tagsSection.style.display = 'block';
+      if (dashboardHeader) dashboardHeader.style.display = 'none';
+      if (breadcrumb) breadcrumb.style.display = 'none';
+      if (backBtn) backBtn.style.display = 'none';
+      if (typeof window.renderTagsMain === 'function') window.renderTagsMain();
+      if (typeof window.renderTaggedItems === 'function') window.renderTaggedItems();
+      break;
     default:
       if (tilesSection) tilesSection.style.display = 'block';
+      if (importedSection) importedSection.style.display = 'block';
       if (dashboardHeader) dashboardHeader.style.display = 'flex';
       if (breadcrumb) breadcrumb.style.display = 'flex';
+      if (typeof window.renderLibrary === 'function') window.renderLibrary();
       break;
   }
 }
@@ -2289,8 +5192,10 @@ function renderFavorites() {
     tile.innerHTML = `<div class="tile-icon"><i class="fas fa-file-pdf"></i></div><div class="tile-text">${fav.title}</div>`;
     tile.onclick = () => {
       if (fav.url && fav.url !== '#') {
-        showPDF(fav.url);
+        const parentPath = (Array.isArray(fav.path) ? fav.path : []).slice(0, -1);
         showView('home');
+        navigateToPath(parentPath);
+        setTimeout(() => showPDF(fav.url), 100);
       }
     };
     container.appendChild(tile);
@@ -2313,8 +5218,10 @@ function renderRecent() {
     tile.innerHTML = `<div class="tile-icon"><i class="fas fa-file-pdf"></i></div><div class="tile-text">${doc.title}</div>`;
     tile.onclick = () => {
       if (doc.url && doc.url !== '#') {
-        showPDF(doc.url);
+        const parentPath = (Array.isArray(doc.path) ? doc.path : []).slice(0, -1);
         showView('home');
+        navigateToPath(parentPath);
+        setTimeout(() => showPDF(doc.url), 100);
       }
     };
     container.appendChild(tile);
@@ -2359,9 +5266,18 @@ function handleBackButton() {
     path.pop();
     const pdfViewer = document.getElementById('pdfViewer');
     if (pdfViewer) {
-      pdfViewer.style.cssText = 'display: none !important;';
       pdfViewer.classList.remove('active');
       pdfViewer.src = '';
+    }
+    const pdfViewerContainer = document.getElementById('pdfViewerContainer');
+    if (pdfViewerContainer) pdfViewerContainer.style.display = 'none';
+    const bookmarksPanel = document.getElementById('pdfBookmarksPanel');
+    if (bookmarksPanel) bookmarksPanel.style.display = 'none';
+    
+    const tilesContainer = document.getElementById('tilesContainer');
+    if (tilesContainer) {
+      const isListView = tilesContainer.classList.contains('list-view');
+      tilesContainer.style.display = isListView ? 'flex' : 'grid';
     }
     renderTiles(getCurrentLevel());
     updateBreadcrumb();
@@ -2647,19 +5563,21 @@ function initializeTimerResize() {
 function toggleTimerMinimize() {
   const timerPanel = document.getElementById('timerPanel');
   const minimizeBtn = document.getElementById('timerMinimize');
+  const timerControls = document.getElementById('timerControls');
   
   if (!timerPanel) return;
   
   timerPanel.classList.toggle('minimized');
+  const isMinimized = timerPanel.classList.contains('minimized');
   
-  if (!timerPanel) return;
-  
-  timerPanel.classList.toggle('minimized');
+    if (timerControls && isMinimized) {
+    timerControls.style.display = 'flex';
+  }
   
   if (minimizeBtn) {
     const icon = minimizeBtn.querySelector('i');
     if (icon) {
-      if (timerPanel.classList.contains('minimized')) {
+      if (isMinimized) {
         icon.className = 'fas fa-expand';
         minimizeBtn.title = 'Expand Timer';
       } else {
@@ -2818,6 +5736,34 @@ function resetTimer() {
   if (timerDisplay) timerDisplay.classList.remove('warning', 'danger');
   
   updateTimerStatus('Timer reset');
+}
+
+function timerFinished() {
+  clearInterval(timerState.interval);
+  timerState.isRunning = false;
+  timerState.isPaused = false;
+  
+  // Play alarm sound
+  if (typeof window.playAlarmSound === 'function') {
+    window.playAlarmSound();
+  }
+  
+  // Show notification
+  showNotification('⏰ Timer Complete! Time\'s up!', 'success');
+  
+  // Update UI
+  document.getElementById('timerStart').style.display = 'flex';
+  document.getElementById('timerPause').style.display = 'none';
+  document.getElementById('timerResume').style.display = 'none';
+  document.getElementById('timerLap').style.display = 'none';
+  
+  const timerDisplay = document.getElementById('timerDisplay');
+  if (timerDisplay) {
+    timerDisplay.textContent = '00:00:00';
+    timerDisplay.classList.add('danger');
+  }
+  
+  updateTimerStatus('Timer complete!', 'complete');
 }
 
 function updateTimerDisplay() {
@@ -3050,42 +5996,282 @@ window.addEventListener('contextmenu', e => {
   e.preventDefault();
 });
 
-(function initDownloadDropdown() {
-  document.addEventListener('DOMContentLoaded', () => {
-    const downloadBtn = document.getElementById('downloadBtn');
-    const downloadDropdown = document.getElementById('downloadDropdown');
+let updateState = {
+    available: false,
+    version: null,
+    update: null,
+    downloading: false,
+    downloadProgress: 0,
+    downloadedBytes: 0,
+    totalBytes: 0
+};
+
+async function checkForUpdatesManual() {
+    console.log('checkForUpdatesManual function called');
     
-    if (downloadBtn && downloadDropdown) {
-      downloadBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        downloadDropdown.classList.toggle('active');
-      });
-      
-            document.addEventListener('click', (e) => {
-        if (!downloadDropdown.contains(e.target) && e.target !== downloadBtn) {
-          downloadDropdown.classList.remove('active');
-        }
-      });
-      
-            const downloadExe = document.getElementById('downloadExe');
-      const downloadMsi = document.getElementById('downloadMsi');
-      
-      if (downloadExe) {
-        downloadExe.href = 'https://github.com/Nugget1252/Questionarytauri/releases/download/v0.4.0/Questionary_0.4.0_x64-setup.exe'; // Replace with actual .exe download URL
-        downloadExe.addEventListener('click', () => {
-          showNotification('Download started for .exe installer', 'info');
-        });
-      }
-      
-      if (downloadMsi) {
-        downloadMsi.href = 'https://github.com/Nugget1252/Questionarytauri/releases/download/v0.4.0/Questionary_0.4.0_x64_en-US.msi'; // Replace with actual .msi download URL
-        downloadMsi.addEventListener('click', () => {
-          showNotification('Download started for .msi installer', 'info');
-        });
-      }
+    const btn = document.getElementById('checkUpdatesBtn');
+    
+        if (updateState.downloading) {
+        showUpdateProgressNotification();
+        return;
     }
-  });
+    
+        if (updateState.available && updateState.update) {
+        await downloadAndInstallUpdate();
+        return;
+    }
+    
+    if (btn) {
+        btn.classList.add('checking');
+        btn.disabled = true;
+    }
+    
+    try {
+        if (window.__TAURI__) {
+            showNotification('Checking for updates...', 'info');
+            
+                        const updater = window.__TAURI__.updater;
+            if (!updater) {
+                throw new Error('Updater plugin not available');
+            }
+            
+            const update = await updater.check();
+            
+            if (update) {
+                console.log('Update available:', update.version);
+                updateState.available = true;
+                updateState.version = update.version;
+                updateState.update = update;
+                
+                showNotification(`Update ${update.version} available! Click update button again to download.`, 'success');
+                updateButtonToDownloadMode(update.version);
+            } else {
+                showNotification('You are on the latest version!', 'success');
+                resetUpdateButton();
+            }
+        } else {
+            showNotification('Update checking is only available in the desktop app.', 'info');
+        }
+    } catch (error) {
+        console.error('Update check error:', error);
+        showNotification('Could not check for updates. Please try again later.', 'warning');
+        resetUpdateButton();
+    } finally {
+        if (btn) {
+            btn.classList.remove('checking');
+            btn.disabled = false;
+        }
+    }
+}
+
+async function downloadAndInstallUpdate() {
+    if (!updateState.update) return;
+    
+    const btn = document.getElementById('checkUpdatesBtn');
+    updateState.downloading = true;
+    updateState.downloadProgress = 0;
+    updateState.downloadedBytes = 0;
+    
+    try {
+        updateButtonToProgressMode();
+        showNotification('Downloading update...', 'info');
+        
+        await updateState.update.downloadAndInstall((event) => {
+            switch (event.event) {
+                case 'Started':
+                    updateState.totalBytes = event.data.contentLength || 0;
+                    console.log('Download started, size:', updateState.totalBytes);
+                    break;
+                case 'Progress':
+                    updateState.downloadedBytes += event.data.chunkLength || 0;
+                    if (updateState.totalBytes > 0) {
+                        updateState.downloadProgress = Math.round((updateState.downloadedBytes / updateState.totalBytes) * 100);
+                    }
+                    updateProgressButton();
+                    break;
+                case 'Finished':
+                    updateState.downloadProgress = 100;
+                    console.log('Download finished');
+                    updateProgressButton();
+                    break;
+            }
+        });
+        
+        showNotification('Update installed! Restarting app...', 'success');
+        updateButtonToRestartMode();
+        
+                setTimeout(async () => {
+            if (window.__TAURI__ && window.__TAURI__.process) {
+                await window.__TAURI__.process.relaunch();
+            }
+        }, 2000);
+        
+    } catch (error) {
+        console.error('Download error:', error);
+        showNotification('Failed to download update. Please try again.', 'error');
+        resetUpdateButton();
+        updateState.downloading = false;
+    }
+}
+
+function updateButtonToDownloadMode(version) {
+    const btn = document.getElementById('checkUpdatesBtn');
+    if (btn) {
+        btn.innerHTML = `<i class="fas fa-download"></i>`;
+        btn.title = `Download update ${version}`;
+        btn.classList.add('update-available');
+    }
+}
+
+function updateButtonToProgressMode() {
+    const btn = document.getElementById('checkUpdatesBtn');
+    if (btn) {
+        btn.innerHTML = `<i class="fas fa-download"></i>`;
+        btn.title = 'Downloading... Click to see progress';
+        btn.classList.add('downloading');
+        btn.classList.remove('update-available');
+    }
+    showDownloadProgressBar();
+}
+
+function updateProgressButton() {
+    const progressBar = document.getElementById('downloadProgressBar');
+    const progressFill = document.getElementById('downloadProgressFill');
+    const progressPercent = document.getElementById('downloadProgressPercent');
+    const progressText = document.getElementById('downloadProgressText');
+    
+    if (progressFill) {
+        progressFill.style.width = `${updateState.downloadProgress}%`;
+    }
+    if (progressPercent) {
+        progressPercent.textContent = `${updateState.downloadProgress}%`;
+    }
+    if (progressText) {
+        progressText.textContent = `${formatBytes(updateState.downloadedBytes)} / ${formatBytes(updateState.totalBytes)}`;
+    }
+    
+    const btn = document.getElementById('checkUpdatesBtn');
+    if (btn) {
+        btn.title = `Downloading: ${formatBytes(updateState.downloadedBytes)} / ${formatBytes(updateState.totalBytes)}`;
+    }
+}
+
+function showDownloadProgressBar() {
+    const progressBar = document.getElementById('downloadProgressBar');
+    if (progressBar) {
+        progressBar.style.display = 'block';
+    }
+}
+
+function hideDownloadProgressBar() {
+    const progressBar = document.getElementById('downloadProgressBar');
+    if (progressBar) {
+        progressBar.style.display = 'none';
+    }
+    const progressFill = document.getElementById('downloadProgressFill');
+    if (progressFill) {
+        progressFill.style.width = '0%';
+    }
+}
+
+function updateButtonToRestartMode() {
+    const btn = document.getElementById('checkUpdatesBtn');
+    if (btn) {
+        btn.innerHTML = `<i class="fas fa-redo"></i>`;
+        btn.title = 'Restarting...';
+        btn.classList.remove('downloading');
+        btn.classList.add('restarting');
+    }
+    hideDownloadProgressBar();
+}
+
+function resetUpdateButton() {
+    const btn = document.getElementById('checkUpdatesBtn');
+    if (btn) {
+        btn.innerHTML = `<i class="fas fa-sync-alt"></i>`;
+        btn.title = 'Check for Updates';
+        btn.classList.remove('update-available', 'downloading', 'restarting');
+    }
+    hideDownloadProgressBar();
+    updateState.available = false;
+    updateState.update = null;
+    updateState.downloading = false;
+}
+
+function showUpdateProgressNotification() {
+    const progress = updateState.downloadProgress;
+    const downloaded = formatBytes(updateState.downloadedBytes);
+    const total = formatBytes(updateState.totalBytes);
+    showNotification(`Downloading: ${progress}% (${downloaded} / ${total})`, 'info');
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+(function initUpdateButton() {
+    function setupButton() {
+        const btn = document.getElementById('checkUpdatesBtn');
+        if (btn && !btn.dataset.initialized) {
+            console.log('Update button found, attaching click handler');
+            btn.dataset.initialized = 'true';
+            btn.addEventListener('click', checkForUpdatesManual);
+        }
+    }
+    
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupButton);
+    } else {
+        setupButton();
+    }
+    
+    setTimeout(setupButton, 1000);
+    setTimeout(setupButton, 3000);
 })();
+
+async function checkForUpdatesOnStartup() {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    try {
+        if (window.__TAURI__) {
+            console.log('Auto-checking for updates...');
+            
+            const updater = window.__TAURI__.updater;
+            if (!updater) {
+                console.log('Updater plugin not available');
+                return;
+            }
+            
+            const update = await updater.check();
+            
+            if (update) {
+                console.log('Update available:', update.version);
+                updateState.available = true;
+                updateState.version = update.version;
+                updateState.update = update;
+                
+                                showNotification(`Update ${update.version} is available! Click the update button to download.`, 'info');
+                updateButtonToDownloadMode(update.version);
+            } else {
+                console.log('App is up to date');
+            }
+        }
+    } catch (error) {
+        console.log('Auto-update check failed (silent):', error.message);
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', checkForUpdatesOnStartup);
+} else {
+    checkForUpdatesOnStartup();
+}
+
+
 
 
 function initializeNewFeatures() {
@@ -3120,7 +6306,7 @@ function initializeNewFeatures() {
   if (closeFlashcardModal && flashcardModal) closeFlashcardModal.onclick = () => flashcardModal.classList.remove('active');
   if (cancelFlashcardBtn && flashcardModal) cancelFlashcardBtn.onclick = () => flashcardModal.classList.remove('active');
   if (saveDeckBtn && typeof saveDeck === 'function') saveDeckBtn.onclick = saveDeck;
-  if (addCardBtn && typeof addCardEditor === 'function') addCardBtn.onclick = addCardEditor;
+  if (addCardBtn && typeof addCardEditor === 'function') addCardBtn.onclick = () => addCardEditor();
   
   
   const closeStudyModal = document.getElementById('closeStudyModal');
@@ -3201,26 +6387,21 @@ function initializeNewFeatures() {
   if (addQuickLinkBtn) {
     addQuickLinkBtn.onclick = (e) => {
       e.stopPropagation();
+      
+      
+      if (currentOpenPDF) {
+        showQuickLinkChoiceDialog();
+        return;
+      }
+      
+      
       if (path.length === 0) {
-        if (typeof showNotification === 'function') showNotification('Navigate to a folder first', 'info');
+        if (typeof showNotification === 'function') showNotification('Navigate to a folder first to add it as a quick link', 'info');
         return;
       }
       
       
-      const pathStr = path.join('|');
-      if (quickLinks.some(ql => ql.pathArray.join('|') === pathStr)) {
-        if (typeof showNotification === 'function') showNotification('This location is already in quick links', 'info');
-        return;
-      }
-      
-      quickLinks.push({ 
-        id: Date.now().toString(), 
-        name: path[path.length - 1], 
-        pathArray: [...path] 
-      });
-      if (typeof saveQuickLinks === 'function') saveQuickLinks();
-      if (typeof renderQuickLinks === 'function') renderQuickLinks();
-      if (typeof showNotification === 'function') showNotification('Added to quick links!', 'success');
+      addCurrentFolderToQuickLinks();
     };
   }
   
@@ -3376,12 +6557,11 @@ function renderTimerPresets() {
     });
     
     
-    btn.addEventListener('contextmenu', (e) => {
+    btn.addEventListener('contextmenu', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (confirm(`Delete "${preset.label}" preset?`)) {
-        removeCustomPreset(preset.id);
-      }
+      const ok = await showConfirm(`Delete "${preset.label}" preset?`, { title: 'Delete Preset', type: 'danger', confirmText: 'Delete' });
+      if (ok) removeCustomPreset(preset.id);
     });
     
     
@@ -3534,7 +6714,7 @@ function savePageBookmarks() {
   localStorage.setItem('questionary-page-bookmarks', JSON.stringify(pageBookmarks));
 }
 
-function addToPrintQueue(docPath, pageNumber, label = '') {
+function addPageBookmark(docPath, pageNumber, label = '') {
   if (!pageBookmarks[docPath]) {
     pageBookmarks[docPath] = [];
   }
@@ -3628,37 +6808,26 @@ document.addEventListener('DOMContentLoaded', initDocumentPreview);
 
 
 function generateShareLink(docPath) {
-  const baseUrl = window.location.origin + window.location.pathname;
-  const params = new URLSearchParams({ path: docPath.join('/') });
-  const shareUrl = `${baseUrl}?${params.toString()}`;
+  // Build a readable path string for sharing
+  const readablePath = docPath.join(' > ');
   
+  // Copy the readable path to clipboard
   if (navigator.clipboard) {
-    navigator.clipboard.writeText(shareUrl).then(() => {
-      showNotification('Share link copied to clipboard!', 'success');
+    navigator.clipboard.writeText(readablePath).then(() => {
+      showNotification('Document path copied to clipboard!', 'success');
+    }).catch(() => {
+      showInfoDialog(readablePath, { title: 'Document Path', type: 'info' });
     });
   } else {
-    prompt('Copy this link:', shareUrl);
+    showInfoDialog(readablePath, { title: 'Document Path', type: 'info' });
   }
   
-  return shareUrl;
+  return readablePath;
 }
 
 function handleShareLink() {
-  const params = new URLSearchParams(window.location.search);
-  const pathParam = params.get('path');
-  
-  if (pathParam) {
-    const pathArr = pathParam.split('/');
-    path = pathArr;
-    const level = getCurrentLevel();
-    
-    if (typeof level === 'string' && level !== '#') {
-      showPDF(level);
-    } else {
-      renderTiles(level);
-    }
-    updateBreadcrumb();
-  }
+  // In a Tauri desktop app, URL query params aren't used for navigation.
+  // This is kept as a no-op for backward compatibility.
 }
 
 window.generateShareLink = generateShareLink;
@@ -3771,39 +6940,703 @@ window.trackPdfViewEnd = trackPdfViewEnd;
 
 document.addEventListener('keydown', (e) => {
   
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  const isInputFocused = e.target.closest('input, textarea, [contenteditable]');
   
-  
-  if (e.key === 'n' || e.key === 'N') {
-    if (typeof openNoteModal === 'function') {
-      e.preventDefault();
-      openNoteModal();
+  // --- Whiteboard shortcuts (always active when WB is open, even in input) ---
+  if (typeof window.isWhiteboardActive === 'function' && window.isWhiteboardActive()) {
+    if (keybindMatches(e, 'wbUndo')) { e.preventDefault(); if (typeof window.wbUndo === 'function') window.wbUndo(); return; }
+    if (keybindMatches(e, 'wbRedo')) { e.preventDefault(); if (typeof window.wbRedo === 'function') window.wbRedo(); return; }
+    if (!isInputFocused) {
+      if (keybindMatches(e, 'wbPen')) { e.preventDefault(); if (typeof window.wbSelectTool === 'function') window.wbSelectTool('pen'); return; }
+      if (keybindMatches(e, 'wbEraser')) { e.preventDefault(); if (typeof window.wbSelectTool === 'function') window.wbSelectTool('eraser'); return; }
+      if (keybindMatches(e, 'wbHighlighter')) { e.preventDefault(); if (typeof window.wbSelectTool === 'function') window.wbSelectTool('highlighter'); return; }
     }
   }
   
+  // --- Skip single-key shortcuts when typing ---
+  if (isInputFocused) return;
   
-  if (e.key === 'f' || e.key === 'F') {
-    if (typeof openFlashcardModal === 'function') {
-      e.preventDefault();
-      openFlashcardModal();
-    }
+  if (keybindMatches(e, 'newNote')) {
+    if (typeof openNoteModal === 'function') { e.preventDefault(); openNoteModal(); }
   }
   
-  
-  if (e.key === 's' || e.key === 'S') {
-    if (path.length > 0 && typeof generateShareLink === 'function') {
-      e.preventDefault();
-      generateShareLink(path);
-    }
+  if (keybindMatches(e, 'newFlashcard')) {
+    if (typeof openFlashcardModal === 'function') { e.preventDefault(); openFlashcardModal(); }
   }
   
+  if (keybindMatches(e, 'shareLocation')) {
+    if (path.length > 0 && typeof generateShareLink === 'function') { e.preventDefault(); generateShareLink(path); }
+  }
   
-  if (e.key === 'q' || e.key === 'Q') {
+  if (keybindMatches(e, 'quickLinks')) {
     e.preventDefault();
     const panel = document.getElementById('quickLinksPanel');
     panel?.classList.toggle('active');
   }
+
+  if (keybindMatches(e, 'toggleMic')) {
+    e.preventDefault();
+    if (typeof window.srToggleMicrophone === 'function') window.srToggleMicrophone();
+  }
+
+  if (keybindMatches(e, 'toggleCam')) {
+    e.preventDefault();
+    if (typeof window.srToggleCamera === 'function') window.srToggleCamera();
+  }
 });
 
+function initSettingsDropdown() {
+  const userBadge = document.getElementById('userBadge');
+  const userDropdown = document.getElementById('userDropdownMenu');
+  
+  if (!userBadge || !userDropdown) {
+    console.log('Settings dropdown elements not found');
+    return;
+  }
+  
+    userBadge.addEventListener('click', (e) => {
+        if (e.target.closest('#userDropdownMenu')) return;
+    e.stopPropagation();
+    userBadge.classList.toggle('active');
+    
+        const usernameDisplay = document.getElementById('username-display');
+    const dropdownUsername = document.getElementById('dropdownUsername');
+    if (usernameDisplay && dropdownUsername) {
+      dropdownUsername.textContent = usernameDisplay.textContent;
+    }
+  });
+  
+    document.addEventListener('click', (e) => {
+    if (!e.target.closest('.user-badge')) {
+      userBadge.classList.remove('active');
+    }
+  });
+  
+    loadSettingsState();
+  
+    setupSettingsToggles();
+  
+    setupSettingsActions();
+  
+  console.log('Settings dropdown initialized');
+}
 
+function loadSettingsState() {
+  const settings = JSON.parse(localStorage.getItem('questionary-settings') || '{}');
+  
+    const verticalNavToggle = document.getElementById('verticalNavbarToggle');
+  if (verticalNavToggle) {
+    verticalNavToggle.checked = settings.verticalNavbar || false;
+    if (settings.verticalNavbar) {
+      document.body.classList.add('vertical-navbar-mode');
+    }
+  }
+  
+    const compactToggle = document.getElementById('compactModeToggle');
+  if (compactToggle) {
+    compactToggle.checked = settings.compactMode || false;
+    if (settings.compactMode) {
+      document.body.classList.add('compact-mode');
+    }
+  }
+  
+    const animationsToggle = document.getElementById('animationsToggle');
+  if (animationsToggle) {
+    animationsToggle.checked = settings.animations !== false;     if (settings.animations === false) {
+      document.body.classList.add('reduced-animations');
+    }
+  }
+  
+    const autoPlayToggle = document.getElementById('autoPlayToggle');
+  if (autoPlayToggle) {
+    autoPlayToggle.checked = settings.autoOpenPdfs || false;
+  }
+  
+    const focusModeToggle = document.getElementById('focusModeToggle');
+  if (focusModeToggle) {
+    focusModeToggle.checked = settings.focusMode || false;
+    if (settings.focusMode) {
+      document.body.classList.add('focus-mode');
+    }
+  }
+  
+    const rememberLocationToggle = document.getElementById('rememberLocationToggle');
+  if (rememberLocationToggle) {
+    rememberLocationToggle.checked = settings.rememberLocation !== false;   }
+}
+
+function saveSettingsState() {
+  const settings = {
+    verticalNavbar: document.getElementById('verticalNavbarToggle')?.checked || false,
+    compactMode: document.getElementById('compactModeToggle')?.checked || false,
+    animations: document.getElementById('animationsToggle')?.checked !== false,
+    autoOpenPdfs: document.getElementById('autoPlayToggle')?.checked || false,
+    focusMode: document.getElementById('focusModeToggle')?.checked || false,
+    rememberLocation: document.getElementById('rememberLocationToggle')?.checked !== false
+  };
+  localStorage.setItem('questionary-settings', JSON.stringify(settings));
+}
+
+function setupSettingsToggles() {
+    function setupToggleRow(toggleId, onToggle) {
+    const toggle = document.getElementById(toggleId);
+    if (!toggle) return;
+    
+        const toggleItem = toggle.closest('.toggle-item');
+    
+        toggle.addEventListener('change', (e) => {
+      e.stopPropagation();
+      onToggle(toggle.checked);
+      saveSettingsState();
+    });
+    
+        if (toggleItem) {
+      toggleItem.style.cursor = 'pointer';
+      toggleItem.addEventListener('click', (e) => {
+                if (e.target === toggle) return;
+        e.preventDefault();
+        e.stopPropagation();
+        toggle.checked = !toggle.checked;
+        onToggle(toggle.checked);
+        saveSettingsState();
+      });
+    }
+    
+    console.log(`${toggleId} handler attached`);
+  }
+  
+    setupToggleRow('verticalNavbarToggle', (checked) => {
+    console.log('Vertical navbar toggled:', checked);
+    if (checked) {
+      document.body.classList.add('vertical-navbar-mode');
+      showNotification('Vertical navbar enabled', 'success');
+    } else {
+      document.body.classList.remove('vertical-navbar-mode');
+      closeSidebar();
+      showNotification('Horizontal navbar restored', 'info');
+    }
+  });
+  
+    setupToggleRow('compactModeToggle', (checked) => {
+    console.log('Compact mode toggled:', checked);
+    document.body.classList.toggle('compact-mode', checked);
+    showNotification(checked ? 'Compact mode enabled' : 'Compact mode disabled', 'info');
+  });
+  
+    setupToggleRow('animationsToggle', (checked) => {
+    console.log('Animations toggled:', checked);
+    document.body.classList.toggle('reduced-animations', !checked);
+    showNotification(checked ? 'Animations enabled' : 'Animations reduced', 'info');
+  });
+  
+    setupToggleRow('autoPlayToggle', (checked) => {
+    console.log('Auto-play toggled:', checked);
+    showNotification(checked ? 'PDFs will auto-open on click' : 'PDF preview mode', 'info');
+  });
+  
+    setupToggleRow('focusModeToggle', (checked) => {
+    console.log('Focus mode toggled:', checked);
+    document.body.classList.toggle('focus-mode', checked);
+    showNotification(checked ? 'Focus mode enabled - distractions hidden' : 'Focus mode disabled', 'info');
+  });
+  
+    setupToggleRow('rememberLocationToggle', (checked) => {
+    console.log('Remember location toggled:', checked);
+    showNotification(checked ? 'Will remember your last location' : 'Will start at home on launch', 'info');
+  });
+}
+
+function setupSettingsActions() {
+    const clearDataBtn = document.getElementById('clearDataBtn');
+  if (clearDataBtn) {
+    clearDataBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('Clear data clicked');
+      showConfirmModal(
+        'Clear Local Data',
+        'Are you sure you want to clear all local data? This will reset favorites, notes, flashcards, quick links, and settings.',
+        () => {
+          const keysToKeep = ['questionary-login'];
+          const allKeys = Object.keys(localStorage).filter(k => k.startsWith('questionary-'));
+          allKeys.forEach(key => {
+            if (!keysToKeep.includes(key)) {
+              localStorage.removeItem(key);
+            }
+          });
+          showNotification('Local data cleared', 'success');
+          document.getElementById('userBadge')?.classList.remove('active');
+          setTimeout(() => location.reload(), 1000);
+        }
+      );
+    });
+    console.log('Clear data button handler attached');
+  }
+  
+    const exportDataBtn = document.getElementById('exportDataBtn');
+  if (exportDataBtn) {
+    exportDataBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('Export clicked');
+      const exportData = {};
+      Object.keys(localStorage).filter(k => k.startsWith('questionary-')).forEach(key => {
+        exportData[key] = localStorage.getItem(key);
+      });
+      
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `questionary-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      showNotification('Data exported successfully', 'success');
+      document.getElementById('userBadge')?.classList.remove('active');
+    });
+    console.log('Export button handler attached');
+  }
+  
+    const importDataBtn = document.getElementById('importDataBtn');
+  if (importDataBtn) {
+    importDataBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('Import clicked');
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      input.onchange = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = JSON.parse(e.target.result);
+            Object.keys(data).forEach(key => {
+              if (key.startsWith('questionary-')) {
+                localStorage.setItem(key, data[key]);
+              }
+            });
+            showNotification('Data imported successfully! Reloading...', 'success');
+            setTimeout(() => location.reload(), 1000);
+          } catch (err) {
+            showNotification('Failed to import data: Invalid file', 'error');
+          }
+        };
+        reader.readAsText(file);
+      };
+      input.click();
+      document.getElementById('userBadge')?.classList.remove('active');
+    });
+    console.log('Import button handler attached');
+  }
+  
+    const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('Logout clicked');
+      showConfirmModal(
+        'Logout',
+        'Are you sure you want to logout?',
+        () => {
+          localStorage.removeItem('questionary-login');
+          showNotification('Logged out successfully', 'info');
+          setTimeout(() => location.reload(), 500);
+        }
+      );
+    });
+    console.log('Logout button handler attached');
+  }
+  
+    const openSettingsBtn = document.getElementById('openSettingsBtn');
+  if (openSettingsBtn) {
+    openSettingsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('All settings clicked — navigating to settings view');
+      document.getElementById('userBadge')?.classList.remove('active');
+      showView('settings');
+      setActiveNav('settingsNav');
+    });
+    console.log('Open settings button handler attached');
+  }
+}
+
+function getKeyboardShortcuts() {
+  return getAllKeybindEntries();
+}
+
+/* ================================================================
+   KEYBINDS SYSTEM — configurable keyboard shortcuts
+   ================================================================ */
+const DEFAULT_KEYBINDS = {
+  // General
+  focusSearch:   { key: '/', ctrl: false, alt: false, shift: false, label: 'Focus Search' },
+  newNote:       { key: 'n', ctrl: false, alt: false, shift: false, label: 'New Note' },
+  newFlashcard:  { key: 'f', ctrl: false, alt: false, shift: false, label: 'New Flashcard' },
+  shareLocation: { key: 's', ctrl: false, alt: false, shift: false, label: 'Share Location' },
+  quickLinks:    { key: 'q', ctrl: false, alt: false, shift: false, label: 'Toggle Quick Links' },
+  goBack:        { key: 'Backspace', ctrl: false, alt: false, shift: false, label: 'Go Back' },
+  goHome:        { key: 'Home', ctrl: false, alt: true, shift: false, label: 'Go Home' },
+  navBack:       { key: 'ArrowLeft', ctrl: false, alt: true, shift: false, label: 'Navigate Back' },
+  // Whiteboard
+  wbUndo:        { key: 'z', ctrl: true, alt: false, shift: false, label: 'Whiteboard Undo' },
+  wbRedo:        { key: 'y', ctrl: true, alt: false, shift: false, label: 'Whiteboard Redo' },
+  wbPen:         { key: 'p', ctrl: false, alt: false, shift: false, label: 'Whiteboard Pen' },
+  wbEraser:      { key: 'e', ctrl: false, alt: false, shift: false, label: 'Whiteboard Eraser' },
+  wbHighlighter: { key: 'h', ctrl: false, alt: false, shift: false, label: 'Whiteboard Highlighter' },
+  // Study Room Media
+  toggleMic:     { key: 'm', ctrl: true, alt: false, shift: false, label: 'Toggle Microphone' },
+  toggleCam:     { key: 'v', ctrl: true, alt: false, shift: false, label: 'Toggle Camera' },
+  pushToTalk:    { key: 't', ctrl: false, alt: false, shift: false, label: 'Push to Talk (Hold)' },
+};
+
+function loadKeybinds() {
+  const saved = localStorage.getItem('questionary-keybinds');
+  const binds = saved ? JSON.parse(saved) : {};
+  // merge defaults with saved (saved overrides)
+  const merged = {};
+  for (const id in DEFAULT_KEYBINDS) {
+    merged[id] = binds[id] ? { ...DEFAULT_KEYBINDS[id], ...binds[id] } : { ...DEFAULT_KEYBINDS[id] };
+  }
+  window._keybinds = merged;
+  return merged;
+}
+
+function saveKeybinds(binds) {
+  localStorage.setItem('questionary-keybinds', JSON.stringify(binds));
+  window._keybinds = binds;
+}
+
+function resetKeybinds() {
+  localStorage.removeItem('questionary-keybinds');
+  const binds = loadKeybinds();
+  renderKeybindsSettings();
+  if (typeof showNotification === 'function') showNotification('Keyboard shortcuts reset to defaults.', 'info');
+  return binds;
+}
+
+function getAllKeybindEntries() {
+  const binds = window._keybinds || loadKeybinds();
+  return Object.entries(binds).map(([id, b]) => ({
+    id, key: formatKeybindDisplay(b), desc: b.label
+  }));
+}
+
+function formatKeybindDisplay(b) {
+  let parts = [];
+  if (b.ctrl) parts.push('Ctrl');
+  if (b.alt) parts.push('Alt');
+  if (b.shift) parts.push('Shift');
+  let keyName = b.key;
+  if (keyName === ' ') keyName = 'Space';
+  else if (keyName.length === 1) keyName = keyName.toUpperCase();
+  parts.push(keyName);
+  return parts.join(' + ');
+}
+
+function keybindMatches(e, bindId) {
+  const binds = window._keybinds || loadKeybinds();
+  const b = binds[bindId];
+  if (!b) return false;
+  const keyMatch = e.key.toLowerCase() === b.key.toLowerCase() || e.key === b.key;
+  return keyMatch && e.ctrlKey === !!b.ctrl && e.altKey === !!b.alt && e.shiftKey === !!b.shift;
+}
+
+/* --- Keybinds Settings UI --- */
+function renderKeybindsSettings() {
+  const container = document.getElementById('keybindsList');
+  if (!container) return;
+  const binds = window._keybinds || loadKeybinds();
+  const categories = {
+    'General': ['focusSearch', 'newNote', 'newFlashcard', 'shareLocation', 'quickLinks', 'goBack', 'goHome', 'navBack'],
+    'Whiteboard': ['wbUndo', 'wbRedo', 'wbPen', 'wbEraser', 'wbHighlighter'],
+    'Study Room': ['toggleMic', 'toggleCam', 'pushToTalk']
+  };
+  let html = '';
+  for (const [cat, ids] of Object.entries(categories)) {
+    html += `<div class="kb-category"><span class="kb-cat-label">${cat}</span></div>`;
+    for (const id of ids) {
+      const b = binds[id];
+      if (!b) continue;
+      html += `<div class="kb-row">
+        <span class="kb-action">${b.label}</span>
+        <button class="kb-key-btn" data-bind-id="${id}" title="Click to change">${formatKeybindDisplay(b)}</button>
+      </div>`;
+    }
+  }
+  container.innerHTML = html;
+  // attach listeners
+  container.querySelectorAll('.kb-key-btn').forEach(btn => {
+    btn.addEventListener('click', () => startKeybindCapture(btn));
+  });
+}
+
+let _capturingBind = null;
+function startKeybindCapture(btn) {
+  // mark as listening
+  if (_capturingBind) {
+    _capturingBind.classList.remove('kb-listening');
+    _capturingBind.textContent = _capturingBind._prevText;
+  }
+  _capturingBind = btn;
+  btn._prevText = btn.textContent;
+  btn.textContent = 'Press a key…';
+  btn.classList.add('kb-listening');
+
+  function onKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    // ignore bare modifier keys
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+    document.removeEventListener('keydown', onKey, true);
+    btn.classList.remove('kb-listening');
+
+    const bindId = btn.dataset.bindId;
+    const binds = window._keybinds || loadKeybinds();
+    binds[bindId] = {
+      ...binds[bindId],
+      key: e.key.length === 1 ? e.key.toLowerCase() : e.key,
+      ctrl: e.ctrlKey,
+      alt: e.altKey,
+      shift: e.shiftKey
+    };
+    saveKeybinds(binds);
+    btn.textContent = formatKeybindDisplay(binds[bindId]);
+    _capturingBind = null;
+    if (typeof showNotification === 'function') showNotification(`Shortcut updated: ${binds[bindId].label}`, 'success');
+  }
+  document.addEventListener('keydown', onKey, true);
+}
+
+/* --- Study Room Settings & PTT --- */
+window.initStudyRoomMediaSettings = async function() {
+  const pttToggle = document.getElementById('pttToggle');
+  if (pttToggle) {
+    pttToggle.checked = localStorage.getItem('questionary-ptt-enabled') === 'true';
+    pttToggle.onchange = (e) => {
+      localStorage.setItem('questionary-ptt-enabled', e.target.checked);
+    };
+  }
+
+  try {
+    try {
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        tempStream.getTracks().forEach(t => t.stop());
+    } catch (e) {
+        console.warn("Media permissions not granted upfront, device labels might be empty.", e);
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioSelect = document.getElementById('audioInputSelect');
+    const audioOutSelect = document.getElementById('audioOutputSelect');
+    const videoSelect = document.getElementById('videoInputSelect');
+    if (!audioSelect || !videoSelect) return;
+
+    audioSelect.innerHTML = '<option value="">Default</option>';
+    if (audioOutSelect) audioOutSelect.innerHTML = '<option value="">Default</option>';
+    videoSelect.innerHTML = '<option value="">Default</option>';
+
+    devices.forEach(device => {
+      if (device.kind === 'audioinput') {
+        const opt = document.createElement('option');
+        opt.value = device.deviceId;
+        opt.text = device.label || `Microphone ${audioSelect.length}`;
+        audioSelect.appendChild(opt);
+      } else if (device.kind === 'audiooutput' && audioOutSelect) {
+        const opt = document.createElement('option');
+        opt.value = device.deviceId;
+        opt.text = device.label || `Speaker ${audioOutSelect.length}`;
+        audioOutSelect.appendChild(opt);
+      } else if (device.kind === 'videoinput') {
+        const opt = document.createElement('option');
+        opt.value = device.deviceId;
+        opt.text = device.label || `Camera ${videoSelect.length}`;
+        videoSelect.appendChild(opt);
+      }
+    });
+
+    const savedAudio = localStorage.getItem('questionary-audio-id');
+    const savedAudioOut = localStorage.getItem('questionary-audio-out-id');
+    const savedVideo = localStorage.getItem('questionary-video-id');
+    if (savedAudio) audioSelect.value = savedAudio;
+    if (savedAudioOut && audioOutSelect) audioOutSelect.value = savedAudioOut;
+    if (savedVideo) videoSelect.value = savedVideo;
+
+    audioSelect.onchange = (e) => localStorage.setItem('questionary-audio-id', e.target.value);
+    if (audioOutSelect) audioOutSelect.onchange = (e) => {
+        localStorage.setItem('questionary-audio-out-id', e.target.value);
+        if (typeof window.srUpdateAudioOutput === 'function') window.srUpdateAudioOutput(e.target.value);
+    };
+    videoSelect.onchange = (e) => localStorage.setItem('questionary-video-id', e.target.value);
+  } catch (err) {
+    console.warn('Could not enumerate media devices:', err);
+  }
+};
+
+window.testSpeaker = function() {
+    const audioId = document.getElementById('audioOutputSelect')?.value;
+    const audio = new Audio('assets/sounds/bell.mp3'); // or any other sound
+    if (audioId && typeof audio.setSinkId === 'function') {
+        audio.setSinkId(audioId).catch(console.error);
+    }
+    audio.play().catch(console.error);
+};
+
+let _testMicStream = null;
+let _testMicAudioCtx = null;
+let _testMicInterval = null;
+window.testMicrophone = async function() {
+    const btn = document.getElementById('testMicBtn');
+    const row = document.getElementById('micTestVolumeRow');
+    const bar = document.getElementById('micTestVolumeBar');
+    if (_testMicStream) {
+        // Stop testing
+        _testMicStream.getTracks().forEach(t => t.stop());
+        _testMicStream = null;
+        if (_testMicAudioCtx) _testMicAudioCtx.close();
+        clearInterval(_testMicInterval);
+        btn.innerHTML = '<i class="fas fa-microphone"></i> Test';
+        row.style.display = 'none';
+        return;
+    }
+    
+    try {
+        const audioId = document.getElementById('audioInputSelect')?.value;
+        const constraints = { audio: audioId ? { deviceId: { exact: audioId } } : true };
+        _testMicStream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        btn.innerHTML = '<i class="fas fa-stop"></i> Stop';
+        row.style.display = 'flex';
+        
+        _testMicAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = _testMicAudioCtx.createMediaStreamSource(_testMicStream);
+        const analyser = _testMicAudioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        _testMicInterval = setInterval(() => {
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+            let avg = sum / dataArray.length;
+            let percent = Math.min(100, Math.round((avg / 128) * 100));
+            if (bar) bar.style.width = percent + '%';
+        }, 50);
+    } catch (e) {
+        console.error(e);
+        if (typeof showNotification === 'function') showNotification('Mic access denied during test', 'error');
+    }
+};
+
+let _testCamStream = null;
+window.testCamera = async function() {
+    const btn = document.getElementById('testCamBtn');
+    const container = document.getElementById('camTestContainer');
+    const video = document.getElementById('camTestVideo');
+    if (_testCamStream) {
+        _testCamStream.getTracks().forEach(t => t.stop());
+        _testCamStream = null;
+        video.srcObject = null;
+        container.style.display = 'none';
+        btn.innerHTML = '<i class="fas fa-video"></i> Test';
+        return;
+    }
+    
+    try {
+        const videoId = document.getElementById('videoInputSelect')?.value;
+        const constraints = { video: videoId ? { deviceId: { exact: videoId } } : true };
+        _testCamStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = _testCamStream;
+        container.style.display = 'block';
+        btn.innerHTML = '<i class="fas fa-stop"></i> Stop';
+    } catch (e) {
+        console.error(e);
+        if (typeof showNotification === 'function') showNotification('Camera access denied during test', 'error');
+    }
+};
+
+let _pttIsPressed = false;
+document.addEventListener('keydown', (e) => {
+  const pttEnabled = localStorage.getItem('questionary-ptt-enabled') === 'true';
+  if (pttEnabled && keybindMatches(e, 'pushToTalk') && !_pttIsPressed) {
+    const isInputFocused = e.target.closest('input, textarea, [contenteditable]');
+    if (isInputFocused) return;
+    e.preventDefault();
+    _pttIsPressed = true;
+    if (typeof window.srSetMicrophoneState === 'function') {
+      window.srSetMicrophoneState(true);
+    }
+  }
+});
+document.addEventListener('keyup', (e) => {
+  const pttEnabled = localStorage.getItem('questionary-ptt-enabled') === 'true';
+  if (pttEnabled && keybindMatches(e, 'pushToTalk') && _pttIsPressed) {
+    const isInputFocused = e.target.closest('input, textarea, [contenteditable]');
+    if (isInputFocused) return;
+    e.preventDefault();
+    _pttIsPressed = false;
+    if (typeof window.srSetMicrophoneState === 'function') {
+      window.srSetMicrophoneState(false);
+    }
+  }
+});
+
+/* --- Initialize keybinds on load --- */
+loadKeybinds();
+
+window.renderKeybindsSettings = renderKeybindsSettings;
+window.resetKeybinds = resetKeybinds;
+
+function initHamburgerMenu() {
+  const hamburgerBtn = document.getElementById('hamburgerMenu');
+  const navLinks = document.getElementById('navLinks');
+  const sidebarOverlay = document.getElementById('sidebarOverlay');
+  const sidebarClose = document.getElementById('sidebarClose');
+  
+  if (hamburgerBtn && navLinks) {
+    hamburgerBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navLinks.classList.toggle('sidebar-open');
+      sidebarOverlay?.classList.toggle('active');
+    });
+  }
+  
+    if (navLinks) {
+    navLinks.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+  }
+  
+  if (sidebarOverlay) {
+    sidebarOverlay.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeSidebar();
+    });
+  }
+  
+  if (sidebarClose) {
+    sidebarClose.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeSidebar();
+    });
+  }
+  
+    }
+
+function closeSidebar() {
+  document.getElementById('navLinks')?.classList.remove('sidebar-open');
+  document.getElementById('sidebarOverlay')?.classList.remove('active');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initSettingsDropdown();
+  initHamburgerMenu();
+});
 

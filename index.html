@@ -7,13 +7,35 @@
     <title>Questionary</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/styles.css?v=210">
+    <link rel="stylesheet" href="css/features.css?v=211">
+    <script>
+      // Mock getUserMedia for PeerJS WebRTC checks on strict Linux WebKit environments
+      if (!window.navigator.mediaDevices) { window.navigator.mediaDevices = {}; }
+      if (!window.navigator.mediaDevices.getUserMedia) {
+          window.navigator.mediaDevices.getUserMedia = function() { return Promise.resolve(null); };
+      }
+    </script>
+    <script src="js/peerjs-patched.js"></script>
+    <script>
+      // Purge hot-updater localStorage cache so old CSS/JS never overrides disk files
+      try {
+        localStorage.removeItem('questionary-code-files');
+        localStorage.removeItem('questionary-code-manifest');
+        console.log('[PURGE] Cleared hotUpdater localStorage cache');
+      } catch(e){}
+    </script>
 </head>
 <body>
-<div class="loading-overlay" id="loadingOverlay">
-    <div class="loading-spinner"></div>
+<div class="loading-overlay active" id="loadingOverlay">
+    <div class="loading-content">
+        <img src="assets/logo.png" alt="Questionary" class="loading-logo">
+        <h1 class="loading-title">Questionary</h1>
+        <div class="loading-spinner"></div>
+        <p class="loading-text">Loading your study materials...</p>
+    </div>
 </div>
 
 <div id="loginScreen" class="login-screen">
@@ -51,8 +73,14 @@
 </div>
 
 <div id="app" style="display:none;">
+    
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+    
     <header class="header">
         <div class="header-left" id="headerLeft">
+            <button class="hamburger-menu" id="hamburgerMenu" title="Toggle Menu">
+                <i class="fas fa-bars"></i>
+            </button>
             <div class="logo">
                 <img src="assets/logo.png" alt="Questionary" class="logo-icon">
                 <span>Questionary</span>
@@ -61,14 +89,25 @@
                 <i class="fas fa-bars"></i>
             </button>
             <nav class="nav-links" id="navLinks">
+                <div class="sidebar-header">
+                    <i class="fas fa-graduation-cap"></i>
+                    <span>Menu</span>
+                </div>
+                <button class="sidebar-close" id="sidebarClose">
+                    <i class="fas fa-times"></i>
+                </button>
                 <a class="nav-link active" id="homeNav"><i class="fas fa-home"></i><span>Home</span></a>
                 <a class="nav-link" id="favoritesNav"><i class="fas fa-star"></i><span>Favorites</span></a>
                 <a class="nav-link" id="recentNav"><i class="fas fa-history"></i><span>Recent</span></a>
                 <a class="nav-link" id="studyPlannerNav"><i class="fas fa-calendar-alt"></i><span>Planner</span></a>
                 <a class="nav-link" id="flashcardsNav"><i class="fas fa-layer-group"></i><span>Flashcards</span></a>
                 <a class="nav-link" id="notesNav"><i class="fas fa-sticky-note"></i><span>Notes</span></a>
+                <a class="nav-link" id="tagsNav"><i class="fas fa-tags"></i><span>Tags</span></a>
                 <a class="nav-link" id="progressNav"><i class="fas fa-chart-line"></i><span>Progress</span></a>
                 <a class="nav-link" id="analyticsNav"><i class="fas fa-chart-bar"></i><span>Analytics</span></a>
+                <a class="nav-link" id="remindersNav"><i class="fas fa-bell"></i><span>Reminders</span></a>
+                <a class="nav-link" id="studyRoomNav"><i class="fas fa-users"></i><span>Study Room</span></a>
+                <a class="nav-link" id="settingsNav" style="display:none;"><i class="fas fa-cog"></i><span>Settings</span></a>
             </nav>
         </div>
         <div class="header-right" id="headerRight">
@@ -76,40 +115,123 @@
                 <i class="fas fa-search search-icon"></i>
                 <input type="text" class="search-input" id="globalSearch" placeholder="Search documents...">
             </div>
-            <div class="download-dropdown-container">
-                <button class="download-btn" id="downloadBtn" title="Download App">
-                    <i class="fas fa-download"></i>
-                </button>
-                <div class="download-dropdown" id="downloadDropdown">
-                    <div class="download-dropdown-header">
-                        <i class="fas fa-desktop"></i>
-                        <span>Get the Desktop App</span>
-                    </div>
-                    <p class="download-description">
-                        Download the native version for better performance and optimization, offline access, and faster and better features and support.
-                    </p>
-                    <div class="download-buttons">
-                        <a href="#" class="download-option" id="downloadExe">
-                            <i class="fas fa-file-download"></i>
-                            <span>Download .exe</span>
-                        </a>
-                        <a href="#" class="download-option" id="downloadMsi">
-                            <i class="fas fa-file-download"></i>
-                            <span>Download .msi</span>
-                        </a>
-                    </div>
-                </div>
-            </div>
+            <button class="update-check-btn" id="checkUpdatesBtn" title="Check for App Updates">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+            <button class="content-update-btn" id="contentUpdateBtn" title="Check for New Content">
+                <i class="fas fa-cloud-download-alt"></i>
+            </button>
             <button class="accessibility-toggle" id="accessibilityToggle" title="Accessibility Options">
                 <i class="fas fa-universal-access"></i>
             </button>
             <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
                 <i class="fas fa-moon" id="themeIcon"></i>
             </button>
-            <div class="user-badge">
+            <div class="user-badge" id="userBadge">
                 <i class="fas fa-user"></i>
                 <span id="username-display">User</span>
                 <span id="adminBadge" class="admin-badge" style="display:none;">ADMIN</span>
+                <i class="fas fa-chevron-down user-dropdown-arrow"></i>
+                
+                
+                <div class="user-dropdown-menu" id="userDropdownMenu">
+                    <div class="user-dropdown-header">
+                        <div class="dropdown-avatar"><i class="fas fa-user"></i></div>
+                        <div class="dropdown-user-info">
+                            <span class="dropdown-name" id="dropdownUsername">User</span>
+                            <span class="dropdown-role">Student</span>
+                        </div>
+                    </div>
+                    
+                    <div class="user-dropdown-item" id="openSettingsBtn">
+                        <i class="fas fa-cog"></i>
+                        <span>All Settings</span>
+                        <i class="fas fa-chevron-right" style="margin-left:auto; font-size:0.55rem; color:var(--fg3);"></i>
+                    </div>
+                    
+                    <div class="user-dropdown-divider"></div>
+                    
+                    <div class="dropdown-group">
+                        <div class="dropdown-group-label">Layout</div>
+                        <div class="user-dropdown-item toggle-item">
+                            <i class="fas fa-bars"></i>
+                            <span>Vertical Navbar</span>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="verticalNavbarToggle">
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                        <div class="user-dropdown-item toggle-item">
+                            <i class="fas fa-compress-alt"></i>
+                            <span>Compact Mode</span>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="compactModeToggle">
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="user-dropdown-divider"></div>
+                    
+                    <div class="dropdown-group">
+                        <div class="dropdown-group-label">Study Features</div>
+                        <div class="user-dropdown-item toggle-item">
+                            <i class="fas fa-eye-slash"></i>
+                            <span>Focus Mode</span>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="focusModeToggle">
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                        <div class="user-dropdown-item toggle-item">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <span>Remember Location</span>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="rememberLocationToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="user-dropdown-divider"></div>
+                    
+                    <div class="dropdown-group">
+                        <div class="dropdown-group-label">Display</div>
+                        <div class="user-dropdown-item toggle-item">
+                            <i class="fas fa-magic"></i>
+                            <span>Animations</span>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="animationsToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                        <div class="user-dropdown-item toggle-item">
+                            <i class="fas fa-file-pdf"></i>
+                            <span>Auto-open PDFs</span>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="autoPlayToggle">
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="user-dropdown-divider"></div>
+                    
+                    <div class="dropdown-group">
+                        <div class="dropdown-group-label">Data</div>
+                        <div class="dropdown-btn-row">
+                            <button class="dropdown-btn" id="exportDataBtn"><i class="fas fa-download"></i> Export</button>
+                            <button class="dropdown-btn" id="importDataBtn"><i class="fas fa-upload"></i> Import</button>
+                        </div>
+                        <button class="dropdown-btn dropdown-btn-danger" id="clearDataBtn"><i class="fas fa-trash-alt"></i> Clear Local Data</button>
+                    </div>
+                    
+                    <div class="user-dropdown-divider"></div>
+                    
+                    <button class="dropdown-btn dropdown-btn-logout" id="logoutBtn">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
             </div>
         </div>
     </header>
@@ -164,7 +286,7 @@
         
         <section id="tilesSection" class="tiles-section">
             <div class="section-header">
-                <h2 class="section-title"><i class="fas fa-folder-open"></i> Documents</h2>
+                <span class="section-label"><i class="fas fa-folder-open"></i> Documents</span>
                 <div class="view-controls">
                     <button id="gridView" type="button" class="view-toggle active"><i class="fas fa-th-large"></i></button>
                     <button id="listView" type="button" class="view-toggle"><i class="fas fa-list"></i></button>
@@ -172,7 +294,44 @@
                 </div>
             </div>
             <div id="tilesContainer" class="tiles-grid"></div>
-            <iframe id="pdfViewer" style="display:none; width:100%; height:calc(100vh - 200px); min-height:500px; border:none; border-radius:12px; background:var(--surface);"></iframe>
+            
+            <!-- PDF Viewer with Bookmark Toolbar -->
+            <div id="pdfViewerContainer" style="display:none;">
+                <div class="pdf-toolbar">
+                    <button id="backToDocumentsBtn" class="btn btn-secondary" onclick="closePDF()"><i class="fas fa-arrow-left"></i> Back</button>
+                    <span id="currentPdfName" class="pdf-name"></span>
+                    <div class="pdf-toolbar-actions">
+                        <button id="addBookmarkBtn" type="button" class="btn btn-primary" onclick="openBookmarkModal()"><i class="fas fa-bookmark"></i> Add Bookmark</button>
+                        <button id="toggleBookmarksBtn" type="button" class="btn btn-secondary" onclick="toggleBookmarksPanel()"><i class="fas fa-list"></i> Bookmarks</button>
+                    </div>
+                </div>
+                <div class="pdf-content-wrapper">
+                    <iframe id="pdfViewer"></iframe>
+                    <div id="pdfBookmarksPanel" class="bookmarks-panel" style="display:none;">
+                        <div class="bookmarks-panel-header">
+                            <h4><i class="fas fa-bookmark"></i> Bookmarks</h4>
+                            <button class="bookmarks-close-btn" onclick="toggleBookmarksPanel()" title="Close"><i class="fas fa-times"></i></button>
+                        </div>
+                        <div id="pdfBookmarksList" class="bookmarks-list">
+                            <p class="empty-state">No bookmarks yet. Click "Add Bookmark" while viewing a PDF.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Image Viewer (for whiteboards) -->
+            <div id="imageViewerContainer" style="display:none;">
+                <div class="pdf-toolbar">
+                    <button class="btn btn-secondary" onclick="closeImageViewer()"><i class="fas fa-arrow-left"></i> Back</button>
+                    <span id="currentImageName" class="pdf-name"></span>
+                    <div class="pdf-toolbar-actions">
+                        <button class="btn btn-primary" onclick="downloadCurrentImage()"><i class="fas fa-download"></i> Download</button>
+                    </div>
+                </div>
+                <div class="image-viewer-body">
+                    <img id="imageViewerImg" src="" alt="Whiteboard">
+                </div>
+            </div>
         </section>
 
         
@@ -191,7 +350,8 @@
         <section id="analyticsSection" class="tiles-section">
             <h2 class="section-title"><i class="fas fa-chart-bar"></i> Analytics</h2>
             
-                        <div class="analytics-stats-row">
+            
+            <div class="analytics-stats-row">
                 <div class="analytics-stat-card">
                     <div class="analytics-stat-icon"><i class="fas fa-desktop"></i></div>
                     <div class="analytics-stat-info">
@@ -280,6 +440,95 @@
                 <button id="createNoteBtn" type="button" class="btn-sm"><i class="fas fa-plus"></i> New Note</button>
             </div>
             <div id="notesGrid" class="notes-grid"></div>
+            
+            <!-- Voice Notes Section -->
+            <div class="voice-notes-section">
+                <div class="section-header">
+                    <h3 class="section-title"><i class="fas fa-microphone"></i> Voice Notes</h3>
+                    <div class="voice-record-controls">
+                        <button id="recordBtnNotes" type="button" class="btn btn-primary btn-sm" onclick="toggleRecordingNotes()">
+                            <i class="fas fa-microphone"></i>
+                            <span>Record</span>
+                        </button>
+                        <span id="recordingTimeNotes" class="recording-time">00:00</span>
+                    </div>
+                </div>
+                <div id="voiceNotesGrid" class="voice-notes-grid"></div>
+            </div>
+        </section>
+
+        <!-- Home Tags Panel (shown on home only) -->
+        <div id="homeTagsSection" class="home-section-card" style="display:none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <span class="section-label"><i class="fas fa-tags"></i> Tags</span>
+                <button class="btn-sm" onclick="openTagModal()"><i class="fas fa-plus"></i> New Tag</button>
+            </div>
+            <div id="homeTagsList" style="display: flex; flex-wrap: wrap; gap: 10px;"></div>
+        </div>
+        
+        <!-- Home Tagged Items Panel (shown on home only) -->
+        <div id="homeTaggedItemsSection" class="home-section-card" style="display:none;">
+            <div style="margin-bottom: 12px;">
+                <span class="section-label"><i class="fas fa-folder-open"></i> Tagged Items</span>
+            </div>
+            <div id="homeTaggedItemsList"></div>
+        </div>
+
+        <!-- Tags Section (full page when nav clicked) -->
+        <section id="tagsSection" class="tiles-section">
+            <div class="section-header">
+                <h2 class="section-title"><i class="fas fa-tags"></i> Tags</h2>
+                <button id="createTagBtnMain" type="button" class="btn-sm" onclick="openTagModal()"><i class="fas fa-plus"></i> New Tag</button>
+            </div>
+            <div class="tags-overview">
+                <div id="tagsListMain" class="tags-grid"></div>
+            </div>
+            <div class="tagged-items-section">
+                <h3><i class="fas fa-folder"></i> Tagged Items</h3>
+                <div id="taggedItemsList" class="tagged-items-grid"></div>
+            </div>
+        </section>
+
+        <!-- PDF Library Section -->
+        <section id="importedSection" class="tiles-section">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                <span class="section-label"><i class="fas fa-book-open"></i> PDF Library</span>
+                <button id="libraryEditBtn" type="button" class="btn-sm" onclick="toggleLibraryEditMode()">
+                    <i class="fas fa-edit"></i> Edit
+                </button>
+            </div>
+            
+            <!-- Edit Mode Controls (hidden by default) -->
+            <div id="libraryEditControls" style="display:none; margin-bottom: 1rem; padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 0.5rem;">
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    <button type="button" class="btn-sm" onclick="openCreateLibraryFolderModal()">
+                        <i class="fas fa-folder-plus"></i> New Folder
+                    </button>
+                    <button type="button" class="btn-sm btn-primary" onclick="openPdfFilePicker()">
+                        <i class="fas fa-file-import"></i> Import PDF
+                    </button>
+                </div>
+                <div id="libraryDropZone" class="library-drop-zone" ondragover="handleLibraryDragOver(event)" ondragleave="handleLibraryDragLeave(event)" ondrop="handleLibraryDrop(event)">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <p>Drag and drop PDF files here</p>
+                </div>
+            </div>
+            
+            <!-- Library Navigation Breadcrumb -->
+            <div id="libraryBreadcrumb" class="library-breadcrumb" style="display:none;">
+                <button class="breadcrumb-item" onclick="navigateToLibraryRoot()">
+                    <i class="fas fa-home"></i> Library
+                </button>
+            </div>
+            
+            <!-- Library Contents (folders only by default) -->
+            <div id="libraryContents" class="library-grid"></div>
+            
+            <!-- Empty state -->
+            <div id="libraryEmptyState" class="library-empty-state" style="display:none;">
+                <i class="fas fa-folder-open"></i>
+                <p>No folders yet. Click Edit to create folders or import PDFs.</p>
+            </div>
         </section>
 
         
@@ -340,6 +589,323 @@
             
             <div class="progress-list" id="progressList">
                 <p class="empty-state"><i class="fas fa-chart-line"></i> No progress tracked yet. Open documents to track your progress.</p>
+            </div>
+        </section>
+
+        <!-- Reminders Section -->
+        <section id="remindersSection" class="tiles-section" style="display:none;">
+            <div class="section-header">
+                <h2 class="section-title"><i class="fas fa-bell"></i> Study Reminders</h2>
+                <button id="addReminderBtn" type="button" class="btn-sm"><i class="fas fa-plus"></i> Add Reminder</button>
+            </div>
+            <p class="settings-hint">Get notified when it's time to study. Reminders will show browser notifications.</p>
+            <div id="remindersList" class="reminders-list">
+                <p class="empty-state"><i class="fas fa-bell-slash"></i> No reminders set. Add one to get started!</p>
+            </div>
+        </section>
+
+        <!-- Study Room Section (Experimental) -->
+        <section id="studyRoomSection" class="tiles-section" style="display:none;">
+            <!-- Content rendered dynamically by studyRoom.js -->
+        </section>
+
+        <!-- Settings Section -->
+        <section id="settingsSection" class="tiles-section" style="display:none;">
+            <h2 class="section-title"><i class="fas fa-cog"></i> Settings</h2>
+            
+            <!-- Appearance -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-palette"></i> Appearance</h3>
+                
+                <!-- Mode toggle -->
+                <div class="setting-row">
+                    <span class="setting-label">Mode</span>
+                    <div class="mode-switcher" id="modeSwitcher">
+                        <button class="mode-btn active" data-mode="light" onclick="setTheme('light')">
+                            <i class="fas fa-sun"></i> Light
+                        </button>
+                        <button class="mode-btn" data-mode="dark" onclick="setTheme('dark')">
+                            <i class="fas fa-moon"></i> Dark
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Custom Theme Builder -->
+                <div class="setting-row" style="flex-direction: column; align-items: stretch;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem;">
+                        <span class="setting-label" style="margin: 0;">Custom Theme</span>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="customThemeToggle" onchange="toggleCustomTheme(this.checked)">
+                            <span class="toggle-slider"></span>
+                        </div>
+                    </div>
+                    <div id="customThemePanel" class="custom-theme-panel" style="display: none;">
+                        <div class="theme-color-grid">
+                            <div class="theme-color-item">
+                                <label>Background</label>
+                                <div class="color-input-wrap">
+                                    <input type="color" id="customBg" value="#f7f7f8" onchange="updateCustomTheme()">
+                                    <span class="color-hex" id="customBgHex">#f7f7f8</span>
+                                </div>
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Surface</label>
+                                <div class="color-input-wrap">
+                                    <input type="color" id="customSurface" value="#ffffff" onchange="updateCustomTheme()">
+                                    <span class="color-hex" id="customSurfaceHex">#ffffff</span>
+                                </div>
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Text Color</label>
+                                <div class="color-input-wrap">
+                                    <input type="color" id="customFg" value="#18181b" onchange="updateCustomTheme()">
+                                    <span class="color-hex" id="customFgHex">#18181b</span>
+                                </div>
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Accent Color</label>
+                                <div class="color-input-wrap">
+                                    <input type="color" id="customAccent" value="#cf6215" onchange="updateCustomTheme()">
+                                    <span class="color-hex" id="customAccentHex">#cf6215</span>
+                                </div>
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Navbar / Header</label>
+                                <div class="color-input-wrap">
+                                    <input type="color" id="customNavbar" value="#ffffff" onchange="updateCustomTheme()">
+                                    <span class="color-hex" id="customNavbarHex">#ffffff</span>
+                                </div>
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Button / Icon Color</label>
+                                <div class="color-input-wrap">
+                                    <input type="color" id="customBtnIcon" value="#cf6215" onchange="updateCustomTheme()">
+                                    <span class="color-hex" id="customBtnIconHex">#cf6215</span>
+                                </div>
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Border / Lines</label>
+                                <div class="color-input-wrap">
+                                    <input type="color" id="customLine" value="#e4e4e7" onchange="updateCustomTheme()">
+                                    <span class="color-hex" id="customLineHex">#e4e4e7</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="theme-color-grid" style="margin-top: 0.75rem;">
+                            <div class="theme-color-item">
+                                <label>Folder 1</label>
+                                <input type="color" id="customFolder1" value="#cf6215" onchange="updateCustomTheme()">
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Folder 2</label>
+                                <input type="color" id="customFolder2" value="#0891b2" onchange="updateCustomTheme()">
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Folder 3</label>
+                                <input type="color" id="customFolder3" value="#16a34a" onchange="updateCustomTheme()">
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Folder 4</label>
+                                <input type="color" id="customFolder4" value="#ea580c" onchange="updateCustomTheme()">
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Folder 5</label>
+                                <input type="color" id="customFolder5" value="#db2777" onchange="updateCustomTheme()">
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Folder 6</label>
+                                <input type="color" id="customFolder6" value="#7c3aed" onchange="updateCustomTheme()">
+                            </div>
+                            <div class="theme-color-item">
+                                <label>Folder 7</label>
+                                <input type="color" id="customFolder7" value="#0d9488" onchange="updateCustomTheme()">
+                            </div>
+                        </div>
+                        <div class="setting-row" style="margin-top: 0.75rem;">
+                            <span class="setting-label">Font</span>
+                            <select id="customFont" class="form-input" style="width: auto; min-width: 160px;" onchange="updateCustomTheme()">
+                                <option value="'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">DM Sans (Default)</option>
+                                <option value="'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">Inter</option>
+                                <option value="'Poppins',-apple-system,sans-serif">Poppins</option>
+                                <option value="'Nunito',-apple-system,sans-serif">Nunito</option>
+                                <option value="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">System Default</option>
+                                <option value="'JetBrains Mono',monospace">JetBrains Mono</option>
+                            </select>
+                        </div>
+                        <div class="custom-theme-actions">
+                            <button class="btn btn-sm btn-secondary" onclick="resetCustomTheme()"><i class="fas fa-undo"></i> Reset</button>
+                            <button class="btn btn-sm btn-primary" onclick="saveCustomTheme()"><i class="fas fa-save"></i> Save Theme</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Study Room Audio/Video -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-video"></i> Study Room Media</h3>
+                <p class="settings-hint">Configure your camera, microphone, and push-to-talk preferences.</p>
+                <div class="setting-row" style="margin-top: 0.75rem;">
+                    <span class="setting-label">Microphone</span>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <select id="audioInputSelect" class="form-input" style="width: auto; min-width: 160px;">
+                            <option value="">Default</option>
+                        </select>
+                        <button class="btn btn-sm btn-secondary" id="testMicBtn" onclick="testMicrophone()"><i class="fas fa-microphone"></i> Test</button>
+                    </div>
+                </div>
+                <div class="setting-row" style="display: none;" id="micTestVolumeRow">
+                    <span class="setting-label">Volume</span>
+                    <div style="flex: 1; height: 10px; background: var(--border-color); border-radius: 5px; overflow: hidden; margin-left: 10px;">
+                        <div id="micTestVolumeBar" style="width: 0%; height: 100%; background: #10b981; transition: width 0.1s;"></div>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Audio Output</span>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <select id="audioOutputSelect" class="form-input" style="width: auto; min-width: 160px;">
+                            <option value="">Default</option>
+                        </select>
+                        <button class="btn btn-sm btn-secondary" id="testSpeakerBtn" onclick="testSpeaker()"><i class="fas fa-volume-up"></i> Test</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Camera</span>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <select id="videoInputSelect" class="form-input" style="width: auto; min-width: 160px;">
+                            <option value="">Default</option>
+                        </select>
+                        <button class="btn btn-sm btn-secondary" id="testCamBtn" onclick="testCamera()"><i class="fas fa-video"></i> Test</button>
+                    </div>
+                </div>
+                <div id="camTestContainer" style="display: none; margin-top: 10px; width: 100%; max-width: 300px; border-radius: 8px; overflow: hidden;">
+                    <video id="camTestVideo" autoplay muted style="width: 100%; display: block;"></video>
+                </div>
+                <div class="setting-row" style="margin-top: 1rem;">
+                    <span class="setting-label">Enable Push-to-Talk (PTT)</span>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="pttToggle">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </div>
+                <p class="settings-hint" style="margin-top: 0.5rem; font-size: 0.8rem;">Change your shortcuts for Camera/Mic and PTT in the Keyboard Shortcuts section.</p>
+            </div>
+
+            <!-- Dashboard Customization -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-th-large"></i> Dashboard Layout</h3>
+                <p class="settings-hint">Choose which widgets to show on your dashboard and their order.</p>
+                <div id="dashboardWidgets" class="widget-list"></div>
+            </div>
+
+            <!-- Tags Management -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-tags"></i> Tags</h3>
+                <p class="settings-hint">Create custom tags to organize your flashcards, notes, and bookmarks.</p>
+                <div class="tags-header">
+                    <button id="createTagBtn" type="button" class="btn-sm" onclick="openTagModal()"><i class="fas fa-plus"></i> New Tag</button>
+                </div>
+                <div id="tagsList" class="tags-list"></div>
+            </div>
+
+            <!-- Voice Notes -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-microphone"></i> Voice Notes</h3>
+                <p class="settings-hint">Record voice memos to capture ideas quickly.</p>
+                <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                    <button id="recordBtn" type="button" class="btn btn-primary btn-sm" onclick="toggleRecording()">
+                        <i class="fas fa-microphone"></i> Record
+                    </button>
+                    <span id="recordingTime" class="recording-time">00:00</span>
+                </div>
+                <div id="voiceNotesList" class="voice-notes-list"></div>
+            </div>
+
+            <!-- Data Management -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-database"></i> Data Management</h3>
+                <p class="settings-hint">Export your data for backup or import from a previous backup.</p>
+                <div class="data-actions">
+                    <button id="exportAllDataBtn" class="btn btn-secondary btn-sm">
+                        <i class="fas fa-download"></i> Export All Data
+                    </button>
+                    <label for="importDataInput" class="btn btn-secondary btn-sm" style="cursor: pointer;">
+                        <i class="fas fa-upload"></i> Import Data
+                    </label>
+                    <input type="file" id="importDataInput" class="import-input" accept=".json">
+                </div>
+            </div>
+
+            <!-- PDF Import -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-file-pdf"></i> Import PDFs</h3>
+                <p class="settings-hint">Drag and drop PDF files to add them to your library.</p>
+                <div id="dropZone" onclick="openPdfFilePicker()">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <p>Drag & drop PDF files here</p>
+                    <p class="drop-hint">or click to browse</p>
+                </div>
+            </div>
+
+            <!-- Keyboard Shortcuts -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-keyboard"></i> Keyboard Shortcuts</h3>
+                <p class="settings-hint">Click on any shortcut to change it. Press the new key combination to assign it.</p>
+                <div id="keybindsList" class="kb-list"></div>
+                <div class="kb-actions">
+                    <button class="btn btn-sm btn-secondary" onclick="resetKeybinds()"><i class="fas fa-undo"></i> Reset to Defaults</button>
+                </div>
+            </div>
+
+            <!-- Alarm Sounds -->
+            <div class="settings-card">
+                <h3 class="settings-card-title"><i class="fas fa-bell"></i> Alarm Sounds</h3>
+                <p class="settings-hint">Choose the sound that plays when timers, reminders, or planner events go off.</p>
+                <div class="alarm-sound-selector">
+                    <div id="alarmSoundOptions" class="alarm-options">
+                        <div class="alarm-option active" data-sound="classic" onclick="setAlarmSound('classic')">
+                            <i class="fas fa-clock"></i><span>Classic</span>
+                            <button type="button" class="preview-sound" onclick="event.stopPropagation(); previewAlarmSound('classic')"><i class="fas fa-play"></i></button>
+                        </div>
+                        <div class="alarm-option" data-sound="gentle" onclick="setAlarmSound('gentle')">
+                            <i class="fas fa-dove"></i><span>Gentle</span>
+                            <button type="button" class="preview-sound" onclick="event.stopPropagation(); previewAlarmSound('gentle')"><i class="fas fa-play"></i></button>
+                        </div>
+                        <div class="alarm-option" data-sound="urgent" onclick="setAlarmSound('urgent')">
+                            <i class="fas fa-exclamation-circle"></i><span>Urgent</span>
+                            <button type="button" class="preview-sound" onclick="event.stopPropagation(); previewAlarmSound('urgent')"><i class="fas fa-play"></i></button>
+                        </div>
+                        <div class="alarm-option" data-sound="chime" onclick="setAlarmSound('chime')">
+                            <i class="fas fa-bell"></i><span>Chime</span>
+                            <button type="button" class="preview-sound" onclick="event.stopPropagation(); previewAlarmSound('chime')"><i class="fas fa-play"></i></button>
+                        </div>
+                        <div class="alarm-option" data-sound="digital" onclick="setAlarmSound('digital')">
+                            <i class="fas fa-microchip"></i><span>Digital</span>
+                            <button type="button" class="preview-sound" onclick="event.stopPropagation(); previewAlarmSound('digital')"><i class="fas fa-play"></i></button>
+                        </div>
+                        <div class="alarm-option" data-sound="bell" onclick="setAlarmSound('bell')">
+                            <i class="fas fa-concierge-bell"></i><span>Bell</span>
+                            <button type="button" class="preview-sound" onclick="event.stopPropagation(); previewAlarmSound('bell')"><i class="fas fa-play"></i></button>
+                        </div>
+                        <div class="alarm-option" data-sound="custom" onclick="setAlarmSound('custom')">
+                            <i class="fas fa-upload"></i><span>Custom</span>
+                            <button type="button" class="preview-sound" onclick="event.stopPropagation(); previewAlarmSound('custom')"><i class="fas fa-play"></i></button>
+                        </div>
+                    </div>
+                    <div class="custom-sound-upload" id="customSoundUpload" style="display:none; margin-top: 0.75rem;">
+                        <label for="customAlarmInput" class="btn btn-secondary btn-sm" style="cursor: pointer;">
+                            <i class="fas fa-upload"></i> Upload Custom Sound
+                        </label>
+                        <input type="file" id="customAlarmInput" accept="audio/*" style="display:none;">
+                        <span id="customSoundName" class="custom-sound-name"></span>
+                    </div>
+                    <div class="alarm-volume" style="margin-top: 0.75rem;">
+                        <label class="form-label" style="font-size: 0.75rem;">Volume</label>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <input type="range" id="alarmVolume" min="0" max="100" value="70" class="volume-slider" oninput="setAlarmVolume(this.value)">
+                            <span id="alarmVolumeValue" style="font-size: 0.75rem; color: var(--fg3); min-width: 30px;">70%</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
     </div>
@@ -498,8 +1064,199 @@
         </div>
     </div>
 
+    <!-- Quiz Modal -->
+    <div class="modal-overlay" id="quizModal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3 id="quizModalTitle"><i class="fas fa-question-circle"></i> Quiz Mode</h3>
+                <button class="modal-close" id="closeQuizModal" type="button" onclick="closeQuizModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body" id="quizContent">
+                <!-- Quiz content populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Reminder Modal -->
+    <div class="modal-overlay" id="reminderModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-bell"></i> Add Study Reminder</h3>
+                <button class="modal-close" id="closeReminderModal" type="button" onclick="closeReminderModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Reminder Title</label>
+                    <input type="text" class="form-input" id="reminderTitle" placeholder="e.g., Study Physics">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Time</label>
+                    <input type="time" class="form-input" id="reminderTime">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Repeat on days</label>
+                    <div class="days-selector" id="reminderDays">
+                        <label class="day-checkbox"><input type="checkbox" value="0"> S</label>
+                        <label class="day-checkbox"><input type="checkbox" value="1"> M</label>
+                        <label class="day-checkbox"><input type="checkbox" value="2"> T</label>
+                        <label class="day-checkbox"><input type="checkbox" value="3"> W</label>
+                        <label class="day-checkbox"><input type="checkbox" value="4"> T</label>
+                        <label class="day-checkbox"><input type="checkbox" value="5"> F</label>
+                        <label class="day-checkbox"><input type="checkbox" value="6"> S</label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelReminderBtn" type="button" onclick="closeReminderModal()">Cancel</button>
+                <button class="btn btn-primary" id="saveReminderBtn" type="button"><i class="fas fa-save"></i> Save Reminder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tag Creation Modal -->
+    <div class="modal-overlay" id="tagModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-tag"></i> Create Tag</h3>
+                <button class="modal-close" id="closeTagModal" type="button" onclick="closeTagModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Tag Name</label>
+                    <input type="text" class="form-input" id="tagNameInput" placeholder="e.g., Important">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Color</label>
+                    <input type="color" class="form-input" id="tagColorInput" value="#cf6215" style="height: 50px;">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelTagBtn" type="button" onclick="closeTagModal()">Cancel</button>
+                <button class="btn btn-primary" id="saveTagBtn" type="button" onclick="saveTag()"><i class="fas fa-save"></i> Create Tag</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bookmark Modal -->
+    <div class="modal-overlay" id="bookmarkModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-bookmark"></i> Add Bookmark</h3>
+                <button class="modal-close" id="closeBookmarkModal" type="button" onclick="closeBookmarkModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Bookmark Title</label>
+                    <input type="text" class="form-input" id="bookmarkTitleInput" placeholder="e.g., Chapter 1 Summary">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Page Number</label>
+                    <input type="number" class="form-input" id="bookmarkPageInput" placeholder="1" min="1">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelBookmarkBtn" type="button" onclick="closeBookmarkModal()">Cancel</button>
+                <button class="btn btn-primary" id="saveBookmarkBtn" type="button" onclick="saveBookmarkFromModal()"><i class="fas fa-save"></i> Add Bookmark</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tag Item Modal -->
+    <div class="modal-overlay" id="tagItemModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-tag"></i> Add Tags to Item</h3>
+                <button class="modal-close" id="closeTagItemModal" type="button" onclick="closeTagItemModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <p id="tagItemName" class="tag-item-name"></p>
+                <div class="form-group">
+                    <label class="form-label">Select Tags</label>
+                    <div id="availableTagsList" class="available-tags-list"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Current Tags</label>
+                    <div id="currentItemTags" class="current-item-tags"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="closeTagItemModalBtn" type="button" onclick="closeTagItemModal()">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Library Folder Modal -->
+    <div class="modal-overlay" id="libraryFolderModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="libraryFolderModalTitle"><i class="fas fa-folder-plus"></i> Create Folder</h3>
+                <button class="modal-close" type="button" onclick="closeLibraryFolderModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="libraryFolderName" class="form-label">Folder Name</label>
+                    <input type="text" id="libraryFolderName" class="form-input" placeholder="Enter folder name...">
+                </div>
+                <div class="form-group">
+                    <label for="libraryFolderColor" class="form-label">Folder Color</label>
+                    <div class="color-picker-row">
+                        <button class="color-option" data-color="#3b82f6" style="background: #3b82f6" onclick="selectLibraryFolderColor('#3b82f6')"></button>
+                        <button class="color-option" data-color="#22c55e" style="background: #22c55e" onclick="selectLibraryFolderColor('#22c55e')"></button>
+                        <button class="color-option" data-color="#eab308" style="background: #eab308" onclick="selectLibraryFolderColor('#eab308')"></button>
+                        <button class="color-option" data-color="#ef4444" style="background: #ef4444" onclick="selectLibraryFolderColor('#ef4444')"></button>
+                        <button class="color-option" data-color="#a855f7" style="background: #a855f7" onclick="selectLibraryFolderColor('#a855f7')"></button>
+                        <button class="color-option" data-color="#ec4899" style="background: #ec4899" onclick="selectLibraryFolderColor('#ec4899')"></button>
+                        <button class="color-option" data-color="#64748b" style="background: #64748b" onclick="selectLibraryFolderColor('#64748b')"></button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" type="button" onclick="closeLibraryFolderModal()">Cancel</button>
+                <button class="btn btn-primary" type="button" onclick="saveLibraryFolder()">Create Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Move Item Modal -->
+    <div class="modal-overlay" id="moveItemModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-arrows-alt"></i> Move Item</h3>
+                <button class="modal-close" type="button" onclick="closeMoveItemModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="move-item-info">Select destination folder:</p>
+                <div id="moveDestinationList" class="move-destination-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" type="button" onclick="closeMoveItemModal()">Cancel</button>
+                <button class="btn btn-primary" type="button" onclick="confirmMoveItem()">Move Here</button>
+            </div>
+        </div>
+    </div>
     
     
+    <div class="download-progress-bar" id="downloadProgressBar" style="display: none;">
+        <div class="download-progress-info">
+            <i class="fas fa-download"></i>
+            <span class="download-progress-text" id="downloadProgressText">Downloading update...</span>
+        </div>
+        <div class="download-progress-track">
+            <div class="download-progress-fill" id="downloadProgressFill"></div>
+        </div>
+        <span class="download-progress-percent" id="downloadProgressPercent">0%</span>
+    </div>
+    
+
+    <div class="content-progress-bar" id="contentProgressBar" style="display: none;">
+        <div class="content-progress-info">
+            <i class="fas fa-cloud-download-alt"></i>
+            <span class="content-progress-text" id="contentProgressText">Downloading new content...</span>
+        </div>
+        <div class="content-progress-track">
+            <div class="content-progress-fill" id="contentProgressFill"></div>
+        </div>
+    </div>
     
     <button class="quick-links-toggle" id="quickLinksToggle" title="Quick Links">
         <i class="fas fa-link"></i>
@@ -572,6 +1329,12 @@
     </button>
 </div>
 
-<script src="js/app.js"></script>
+
+<script src="js/hotUpdater.js?v=99"></script>
+<script src="js/contentUpdater.js?v=99"></script>
+<script src="js/features.js?v=114"></script>
+<script src="js/studyRoom.js?v=117"></script>
+<script src="js/app.js?v=115"></script>
 </body>
 </html>
+
