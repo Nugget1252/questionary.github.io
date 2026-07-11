@@ -641,21 +641,11 @@
               <input type="password" id="srJoinPassword" class="sr-input" placeholder="Room password (if required)" maxlength="32" autocomplete="off">
               <button type="button" class="sr-pw-toggle" id="srJoinPwToggle" title="Show password"><i class="fas fa-eye"></i></button>
             </div>
-            <small class="sr-join-hint"><b>Internet:</b> <code>10-character alphanumeric code</code> &nbsp;|&nbsp; <b>LAN:</b> unavailable</small>
+            <small class="sr-join-hint"> <code>10-character alphanumeric code</code></small>
           </div>
         </div>
 
-        <!-- Features overview -->
-        <div class="sr-features-grid">
-          <div class="sr-feature-item"><i class="fas fa-comments"></i><span>Text Chat</span></div>
-          <div class="sr-feature-item"><i class="fas fa-chalkboard"></i><span>Shared Whiteboard</span></div>
-          <div class="sr-feature-item"><i class="fas fa-stopwatch"></i><span>Study Timer</span></div>
-          <div class="sr-feature-item"><i class="fas fa-tasks"></i><span>Progress Tracking</span></div>
-          <div class="sr-feature-item"><i class="fas fa-network-wired"></i><span>LAN Disabled</span></div>
-          <div class="sr-feature-item"><i class="fas fa-globe"></i><span>Cross-Region Internet</span></div>
-          <div class="sr-feature-item"><i class="fas fa-shield-alt"></i><span>Password Rooms</span></div>
-        </div>
-      </div>
+
     `;
 
     /* listeners */
