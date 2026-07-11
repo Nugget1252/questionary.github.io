@@ -245,55 +245,14 @@
         window.codeUpdateState.pendingUpdates = [];
         
         updateCodeUpdateUI('idle');
-        
-        if (successCount > 0) {
-            if (requiresReload) {
-                if (typeof showNotification === 'function') {
-                    showNotification(
-                        `Downloaded ${successCount} update(s). Reload the app to apply JS changes.`,
-                        'success'
-                    );
-                }
-                showReloadPrompt();
-            } else {
-                if (typeof showNotification === 'function') {
-                    showNotification(`Applied ${successCount} update(s) successfully!`, 'success');
-                }
-            }
-        }
-    }
+
     
     function applyHotCSS(filename, content) {
         // Disabled: let the actual CSS files load from disk/server
         console.log(`[HotUpdate] Skipping hot CSS apply for ${filename} — using live file`);
     }
     
-    function showReloadPrompt() {
-        let modal = document.getElementById('reloadPromptModal');
-        if (!modal) {
-            modal = document.createElement('div');
-            modal.id = 'reloadPromptModal';
-            modal.innerHTML = `
-                <div class="reload-prompt-overlay">
-                    <div class="reload-prompt-content">
-                        <i class="fas fa-sync-alt reload-icon"></i>
-                        <h3>Update Ready</h3>
-                        <p>New code updates have been downloaded. Reload the app to apply them.</p>
-                        <div class="reload-prompt-buttons">
-                            <button class="btn btn-secondary" onclick="document.getElementById('reloadPromptModal').style.display='none'">
-                                Later
-                            </button>
-                            <button class="btn btn-primary" onclick="location.reload()">
-                                <i class="fas fa-redo"></i> Reload Now
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(modal);
-        }
-        modal.style.display = 'block';
-    }
+
     
     function updateCodeUpdateUI(state, count = 0) {
         const btn = document.getElementById('contentUpdateBtn');
