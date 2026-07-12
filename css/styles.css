@@ -442,23 +442,54 @@ body {
 .btn-sm:hover { border-color: var(--fg3); background: var(--hover); }
 
 /* ── CONTAINER & STATS ── */
-.container { max-width: 1060px; margin: 0 auto; padding: 1.25rem 1.75rem; }
+.container { 
+    width: 100%;
+    max-width: 72rem; 
+    margin: 0 auto; 
+    
+    padding: clamp(1rem, 2vw, 2rem) clamp(1.25rem, 3vw, 2.5rem); 
+    
+    box-sizing: border-box;
+}
 .dashboard-header {
-    display: flex; justify-content: center; gap: 0.75rem;
-    padding: 0; margin-bottom: 1.75rem; flex-wrap: wrap;
+    display: flex; 
+    justify-content: center; 
+    gap: 0.75rem;
+    padding: 0; 
+    margin-bottom: 1.75rem; 
+    flex-wrap: wrap;
+    width: 100%;
 }
 .stat-card {
-    display: flex; align-items: center; gap: 0.75rem;
-    background: var(--surface); border: 1px solid var(--line);
-    border-radius: 10px; padding: 0.9rem 1.25rem; min-width: 155px;
+    display: flex; 
+    align-items: center; 
+    gap: 0.75rem;
+    background: var(--surface); 
+    border: 1px solid var(--line);
+    border-radius: 10px; 
+    padding: 0.9rem 1.25rem; 
+    
+    /* THE FIX: Let them size naturally by content, matching your "Before" layout */
+    min-width: 160px;
+    flex: 0 1 auto;
+    
     transition: transform 0.15s, box-shadow 0.15s;
     box-shadow: var(--shadow-sm);
 }
-.stat-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
 .stat-icon {
-    width: 36px; height: 36px; border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.85rem; flex-shrink: 0;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 8px;
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    font-size: 0.85rem; 
+    flex-shrink: 0;
+}
+
+.stat-card:hover { 
+    transform: translateY(-1px); 
+    box-shadow: var(--shadow-md); 
 }
 .stat-icon.documents { background: var(--primary-light); color: var(--primary-color); }
 .stat-icon.favorites { background: #fef9c3; color: #ca8a04; }
