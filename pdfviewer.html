@@ -64,12 +64,36 @@ html, body { height: 100%; overflow: hidden; background: #474a4d; font-family: -
 }
 .page-wrapper canvas { display: block; }
 
-/* Overrides to bind selection behaviors cleanly to canvas graphics */
+/* ==========================================================================
+   THE FIX: Full suppression of core stylesheet layout conflicts
+   ========================================================================== */
 .textLayer {
-    opacity: 1;
-    mix-blend-mode: multiply;
+    position: absolute !important;
+    text-align: start;
+    left: 0 !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    overflow: hidden;
+    opacity: 1 !important; /* Keep at 1 so the blue highlight isn't faded */
+    line-height: 1.0 !important;
 }
-.textLayer ::selection { background: rgba(0, 0, 170, 0.25) !important; }
+
+/* Nullify visual presence of spans while preserving selection coordinates */
+.textLayer span {
+    color: transparent !important;
+    background: transparent !important;
+    position: absolute !important;
+    white-space: pre !important;
+    cursor: text !important;
+    transform-origin: 0% 0% !important;
+}
+
+/* Style the native browser selection color overlay cleanly */
+.textLayer ::selection {
+    background: rgba(0, 102, 255, 0.35) !important;
+    color: transparent !important;
+}
 
 /* Error / Loading states */
 #errorMessage {
