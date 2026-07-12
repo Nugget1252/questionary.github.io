@@ -441,11 +441,17 @@ body {
 }
 .btn-sm:hover { border-color: var(--fg3); background: var(--hover); }
 
-/* ── CONTAINER & STATS ── */
-.container { max-width: 1060px; margin: 0 auto; padding: 1.25rem 1.75rem; }
-.dashboard-header {
-    display: flex; justify-content: center; gap: 0.75rem;
-    padding: 0; margin-bottom: 1.75rem; flex-wrap: wrap;
+.container { 
+    width: 100%;
+    /* 1. Fluid upper bounds using standard rems */
+    max-width: 100rem; 
+    margin: 0 auto; 
+    
+    /* 2. Responsive, fluid padding using clamp() */
+    padding: clamp(1rem, 3vw, 2.5rem) clamp(1rem, 4vw, 3.5rem); 
+    
+    /* 3. Defensive styling for layout stability */
+    box-sizing: border-box;
 }
 .stat-card {
     display: flex; align-items: center; gap: 0.75rem;
