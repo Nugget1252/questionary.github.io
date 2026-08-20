@@ -1,55 +1,194 @@
-/* ============================================================
-   Study Room — Live Collaborative Study Sessions
-   ────────────────────────────────────────────────
-   Supports TWO networking modes:
-     1) LAN — host starts a local relay server (Rust/Tauri)
-     2) Internet — both parties connect to a public relay server
-
-   NO WebRTC / PeerJS required — works on every OS & webview.
-   ============================================================ */
+/* =========================================================================
+ *   QUESTIONARY STUDY ROOM ENGINE v8.5 (Master WebRTC + Rust Relay Suite)
+ *   - 10-Digit Base32 Codec (Zero raw IPs displayed)
+ *   - Native WebRTC Audio / Video / Screenshare Mesh over Rust WebSocket Relay
+ *   - Automatic Screen Share Spotlight View & Renegotiation Engine
+ *   - Linux WebKitGTK / PipeWire / xdg-desktop-portal Stream Handling
+ *   - Whiteboard & Synchronized Pomodoro Engine
+ *   ========================================================================= */
 
 (function () {
   'use strict';
 
-  /* ---------- constants ---------- */
-  const MAX_PARTICIPANTS = 8;
-  const PROGRESS_SYNC_INTERVAL = 10000; // 10 s
+  /* ---------- Constants & Codecs ---------- */
+  const MAX_PARTICIPANTS = 12;
   const ROOM_CODE_LENGTH = 10;
-  const ROOM_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const DEFAULT_RELAY_URL = normalizeRelayUrl(
-    (window.QUESTIONARY_RELAY_URL || '').trim() ||
-    localStorage.getItem('questionary-relay-url') ||
-    'peerjs-server' // Replace this with your production WebSocket URL (e.g. wss://relay.yourdomain.com)
-  );
+  const BASE32_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const CONNECT_TIMEOUT_MS = 20000;
 
-  /* ---------- state ---------- */
-  let ws = null;              // WebSocket connection
-  let myId = '';              // client-id assigned by the relay server
-  let peers = {};             // peerId → { nickname, goal, seconds }
-  let serverPort = 0;        // port the relay is running on (host only)
-  let roomAddress = '';       // "ip:port" displayed to the host for sharing
+  /* STUN + Free OpenRelay TURN Pool */
+  const ICE_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      {
+        urls: [
+          'turn:openrelay.metered.ca:80',
+          'turn:openrelay.metered.ca:443',
+          'turn:openrelay.metered.ca:443?transport=tcp'
+        ],
+        username: 'openrelay',
+        credential: 'openrelay'
+      }
+    ],
+    sdpSemantics: 'unified-plan',
+    iceCandidatePoolSize: 2
+  };
+
+  /* ----------------------------------------------------------------
+   * 10-DIGIT BASE32 IP:PORT CODEC
+   * ---------------------------------------------------------------- */
+  function ipPortToCode(ipStr, portNum) {
+    try {
+      const parts = ipStr.split('.').map(Number);
+      if (parts.length !== 4) return generateRandomCode();
+      const bytes = [
+        parts[0], parts[1], parts[2], parts[3],
+        (portNum >> 8) & 0xFF,
+        portNum & 0xFF
+      ];
+      let bits = 0n;
+      for (let b of bytes) {
+        bits = (bits << 8n) | BigInt(b);
+      }
+      bits = bits << 2n; // 50 bits
+      let code = '';
+      for (let i = 9; i >= 0; i--) {
+        const index = Number((bits >> BigInt(i * 5)) & 0x1Fn);
+        code += BASE32_ALPHABET[index];
+      }
+      return code;
+    } catch (e) {
+      return generateRandomCode();
+    }
+  }
+
+  function codeToIpPort(codeStr) {
+    try {
+      const clean = codeStr.toUpperCase().trim().replace(/[^2-9A-Z]/g, '');
+      if (clean.length !== 10) return null;
+      let bits = 0n;
+      for (let char of clean) {
+        const idx = BASE32_ALPHABET.indexOf(char);
+        if (idx === -1) return null;
+        bits = (bits << 5n) | BigInt(idx);
+      }
+      bits = bits >> 2n;
+      const p2 = Number(bits & 0xFFn);
+      const p1 = Number((bits >> 8n) & 0xFFn);
+      const d = Number((bits >> 16n) & 0xFFn);
+      const c = Number((bits >> 24n) & 0xFFn);
+      const b = Number((bits >> 32n) & 0xFFn);
+      const a = Number((bits >> 40n) & 0xFFn);
+      const port = (p1 << 8) | p2;
+      const ip = `${a}.${b}.${c}.${d}`;
+      return { ip, port };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function generateRandomCode() {
+    let id = '';
+    for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
+      id += BASE32_ALPHABET[Math.floor(Math.random() * BASE32_ALPHABET.length)];
+    }
+    return id;
+  }
+
+  /* ---------- Zero-Asset Web Audio Synthesizer ---------- */
+  const SoundFX = {
+    ctx: null,
+    init() {
+      if (!this.ctx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) this.ctx = new AudioCtx();
+      }
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+    },
+    playTone(freq, type = 'sine', duration = 0.15, gain = 0.1) {
+      try {
+        this.init();
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+        g.gain.setValueAtTime(gain, this.ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
+        osc.connect(g);
+        g.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + duration);
+      } catch (e) {}
+    },
+    playJoin() {
+      this.playTone(440, 'sine', 0.1, 0.08);
+      setTimeout(() => this.playTone(880, 'sine', 0.2, 0.08), 100);
+    },
+    playLeave() {
+      this.playTone(660, 'sine', 0.1, 0.08);
+      setTimeout(() => this.playTone(330, 'sine', 0.2, 0.08), 100);
+    },
+    playPop() {
+      this.playTone(800, 'triangle', 0.06, 0.08);
+    },
+    playChime() {
+      this.playTone(523.25, 'sine', 0.2, 0.1);
+      setTimeout(() => this.playTone(659.25, 'sine', 0.3, 0.1), 120);
+      setTimeout(() => this.playTone(783.99, 'sine', 0.4, 0.1), 240);
+    },
+    playHandRaise() {
+      this.playTone(350, 'triangle', 0.1, 0.1);
+      setTimeout(() => this.playTone(700, 'triangle', 0.25, 0.1), 100);
+    }
+  };
+
+  /* ---------- Core State ---------- */
+  let socket = null;
+  let myId = '';
+  let peers = {}; // id -> { nickname, goal, seconds, handRaised, isSpeaking, hasCam, hasScreen }
+  let peerConnections = new Map(); // id -> RTCPeerConnection
+  let remoteStreams = new Map(); // id -> MediaStream
+  let screenShareOwnerId = null; // null | 'self' | peerId
+  let roomAddress = '';
   let isHost = false;
   let nickname = '';
   let roomPassword = '';
-  let studyTimer = null;
-  let studySeconds = 0;
-  let studyGoal = '';
-  let chatMessages = [];
+  let roomLocked = false;
+  let handRaised = false;
+  let unreadChatCount = 0;
+  let activeTab = 'chat';
   let sessionActive = false;
-  let internetMode = false;   // true when using a public relay server
-  let relayUrl = '';           // full relay WS URL, e.g. wss://relay.example.com
-  let internetRoomId = '';     // room id on the public relay
 
-  /* ---------- webrtc state ---------- */
-  let localScreenStream = null;
+  /* ---------- Timer & Pomodoro Engine ---------- */
+  let mainInterval = null;
+  let timerMode = 'stopwatch';
+  let timerRunning = false;
+  let timerSeconds = 0;
+  let timerDuration = 25 * 60;
+  let timerRemaining = 25 * 60;
+  let studyGoal = '';
+  let totalUptimeSeconds = 0;
+
+  /* ---------- Chat Messages ---------- */
+  let chatMessages = [];
+
+  /* ---------- Media Streams & Audio Detection ---------- */
   let localMediaStream = null;
+  let localScreenStream = null;
   let micActive = false;
   let camActive = false;
-  let peerMediaConnections = {}; 
-  let peerConnections = {}; 
-  const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  let pttActive = false;
+  let audioContext = null;
+  let localAudioAnalyser = null;
+  let localAudioSource = null;
+  let speechInterval = null;
+  let isSpeaking = false;
 
-  /* ---------- whiteboard state ---------- */
+  /* ---------- Whiteboard State ---------- */
   let wbActive = false;
   let wbCanvas = null;
   let wbCtx = null;
@@ -59,329 +198,295 @@
   let wbPanning = false;
   let wbColor = '#ffffff';
   let wbPenSize = 3;
-  let wbEraserSize = 20;
-  let wbHighlighterSize = 18;
+  let wbEraserSize = 24;
+  let wbHighlighterSize = 20;
   let wbTool = 'pen';
-  let wbStrokes = [];     // stroke commands for undo (lightweight, no pixel data)
+  let wbGridStyle = 'dots';
+  let wbStrokes = [];
   let wbRedoStrokes = [];
   let wbQuestions = [];
   let wbNextQId = 1;
-  let wbBlockStart = null;
-  let wbBlockRect = null;
-  let wbFullscreen = false;
-
-  /* --- infinite canvas: pan & zoom --- */
-  let wbCanvasW = 4096;   // dynamic — grows as needed
+  let wbShapeStart = null;
+  let wbRemoteCursors = {};
+  let wbCanvasW = 4096;
   let wbCanvasH = 4096;
   let wbZoom = 1;
   let wbPanX = 0;
   let wbPanY = 0;
   let wbPanStart = null;
-  let wbSpaceDown = false;
+  let _liveStrokePoints = [];
+  let _lastLiveBroadcast = 0;
 
   /* ================================================================
-     HELPERS
+     HELPERS & FORMATTERS
      ================================================================ */
   function fmtTime(sec) {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
+    const s = Math.max(0, Math.floor(sec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const remS = s % 60;
     return h > 0
-      ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-      : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      ? `${h}:${String(m).padStart(2, '0')}:${String(remS).padStart(2, '0')}`
+      : `${String(m).padStart(2, '0')}:${String(remS).padStart(2, '0')}`;
   }
 
   function escapeHTML(str) {
+    if (!str) return '';
     const d = document.createElement('div');
     d.textContent = str;
     return d.innerHTML;
   }
 
-  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-
-  /* ---------- room code encoding ---------- */
-
-  /* Legacy LAN codes (kept for backward parsing only): XXXX-XXXX-XX */
-  function encodeRoomCode(ip, port) {
-    const o = ip.split('.').map(Number);
-    const n = (BigInt(o[0]) << 40n) | (BigInt(o[1]) << 32n) |
-              (BigInt(o[2]) << 24n) | (BigInt(o[3]) << 16n) | BigInt(port);
-    let code = n.toString(36).toUpperCase();
-    while (code.length < 10) code = '0' + code;
-    // Format: XXXX-XXXX-XX
-    return code.slice(0, 4) + '-' + code.slice(4, 8) + '-' + code.slice(8);
-  }
-
-  function decodeRoomCode(code) {
-    const clean = code.replace(/[-\s]/g, '').toLowerCase();
-    if (!/^[0-9a-z]{6,12}$/.test(clean)) return null;
-    let num = 0n;
-    for (const ch of clean) {
-      const d = parseInt(ch, 36);
-      if (isNaN(d)) return null;
-      num = num * 36n + BigInt(d);
-    }
-    const port = Number(num & 0xFFFFn);
-    num >>= 16n;
-    const ip = [
-      Number((num >> 24n) & 0xFFn),
-      Number((num >> 16n) & 0xFFn),
-      Number((num >> 8n) & 0xFFn),
-      Number(num & 0xFFn)
-    ].join('.');
-    if (port === 0 || port > 65535) return null;
-    return { ip, port };
-  }
-
-  /* Internet room codes: 10-character alphanumeric code */
-  function generateRoomId() {
-    let id = '';
-    for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
-      id += ROOM_CODE_CHARS[Math.floor(Math.random() * ROOM_CODE_CHARS.length)];
-    }
-    return id;
-  }
+  function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
 
   function normalizeRoomCode(raw) {
     if (!raw) return '';
-    const code = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (code.length !== ROOM_CODE_LENGTH) return '';
-    return code;
+    return raw.toUpperCase().trim().replace(/[^2-9A-Z0-9]/g, '');
   }
 
-  /** Build a valid WebSocket URL from a relay host string.
-      Accepts: "host", "host:port", "ws://host:port", "wss://host:port" */
-  function normalizeRelayUrl(input) {
-    let s = input.trim();
-    if (!s) return '';
-    if (!/^wss?:\/\//i.test(s)) {
-      // Default to wss:// for security; use ws:// only if port 80 or explicit
-      s = 'wss://' + s;
+  function notify(msg, type = 'info') {
+    if (typeof window.showNotification === 'function') {
+      window.showNotification(msg, type);
+    } else {
+      console.log(`[StudyRoom - ${type.toUpperCase()}] ${msg}`);
     }
-    // Strip trailing slash
-    return s.replace(/\/+$/, '');
   }
 
-  /* ================================================================
-     TAURI INVOKE HELPER
-     ================================================================ */
-  async function tauriInvoke(cmd, args) {
-    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-      return window.__TAURI__.core.invoke(cmd, args);
+  async function tauriInvoke(cmd, args = {}) {
+    if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
+      return await window.__TAURI__.core.invoke(cmd, args);
     }
-    throw new Error('Tauri runtime not available');
+    if (window.__TAURI__ && typeof window.__TAURI__.invoke === 'function') {
+      return await window.__TAURI__.invoke(cmd, args);
+    }
+    return null;
   }
 
   /* ================================================================
-     WEBSOCKET LAYER
+     WEBRTC P2P MEDIA MESH OVER WEBSOCKET RELAY
      ================================================================ */
-  /** Connect to a WebSocket server.
-   *  @param {string} address  — either "ip:port" (LAN) or full "wss://..." URL (Internet) */
-
-  class PeerJSRoomHub {
-    constructor() {
-      this.readyState = WebSocket.CONNECTING;
-      this.peers = new Map(); // client connections for data
-      this.hostId = null;
-      this.localPeerId = null;
-      this.isServer = isHost;
-      this.nextServerId = 1;
-      this.serverClients = new Map(); // id -> { nickname, peerJsId }
-      this.calls = [];
+  function createPeerConnection(remotePeerId, isInitiator = false) {
+    if (peerConnections.has(remotePeerId)) {
+      return peerConnections.get(remotePeerId);
     }
-    
-    init(address) {
-      return new Promise((resolve, reject) => {
-        const pOpts = {
-          config: {
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:global.stun.twilio.com:3478' }
-            ]
-          }
-        };
-        
-        if (isHost) {
-          const expectedHostId = 'qroom-' + internetRoomId.toLowerCase();
-          console.log("Starting host PeerJS id:", expectedHostId);
-          console.log("RTCPeerConnection:", typeof window.RTCPeerConnection); console.log("navigator.mediaDevices:", typeof (navigator.mediaDevices)); if (navigator.mediaDevices && !navigator.mediaDevices.getUserMedia) { navigator.mediaDevices.getUserMedia = () => Promise.resolve(null); }
-          this.peer = new Peer(expectedHostId, pOpts);
-          this.localPeerId = expectedHostId;
-        } else {
-          this.peer = new Peer(pOpts);
-        }
-        
-        this.peer.on('open', (id) => {
-          this.localPeerId = id;
-          if (isHost) {
-            this.readyState = WebSocket.OPEN;
-            resolve();
-          } else {
-            console.log("Client connecting to host...", 'qroom-' + internetRoomId.toLowerCase());
-            this.hostConn = this.peer.connect('qroom-' + internetRoomId.toLowerCase(), { reliable: true });
-            this.hostConn.on('open', () => {
-              this.readyState = WebSocket.OPEN;
-              resolve();
-            });
-            this.hostConn.on('data', (raw) => {
-               if(this.onmessage) this.onmessage({ data: String(raw) });
-            });
-            this.hostConn.on('error', (err) => {
-               if(this.onerror) this.onerror(err);
-               reject(err);
-            });
-          }
-        });
-        
-        this.peer.on('connection', (conn) => {
-          if (isHost) {
-             conn.on('data', (raw) => {
-                this.mockServerHandle(conn, JSON.parse(raw));
-             });
-             conn.on('close', () => {
-                this.mockServerDisconnect(conn.peer);
-             });
-          } else {
-             // client to client data?
-          }
-        });
-        
-        // Handle incoming screen-share calls without manual WebRTC SDP logic!
-        this.peer.on('call', (call) => {
-           call.answer(); // answer without mic/video for viewing only
-           call.on('stream', (remoteStream) => {
-              // Find who called by searching peerJsId in peers state
-              let callerId = 'host';
-              for(let id in peers) {
-                 if (peers[id].peerJsId === call.peer) {
-                    callerId = id; break;
-                 }
-              }
-              if (call.peer === ('qroom-' + internetRoomId.toLowerCase())) callerId = 'host'; // or whoever is host internal ID
-              // Wait, who is host relative to me? 
-              // We'll just pass callerId to renderRemoteVideo
-              renderRemoteVideo(call.peer, remoteStream); // we use their peerJsId as DOM id!
-           });
-        });
-        
-        this.peer.on('error', (err) => {
-          console.error("PeerJS Error:", err);
-          if (this.onerror) this.onerror(err);
-          reject(err);
-        });
+
+    console.log(`[WebRTC] Creating RTCPeerConnection with ${remotePeerId} (Initiator: ${isInitiator})`);
+    const pc = new RTCPeerConnection(ICE_CONFIG);
+    peerConnections.set(remotePeerId, pc);
+
+    // Attach local camera/microphone tracks
+    if (localMediaStream) {
+      localMediaStream.getTracks().forEach(track => {
+        pc.addTrack(track, localMediaStream);
       });
     }
-    
-    send(str) {
-      if (!isHost) {
-         if (this.hostConn && this.hostConn.open) {
-             const obj = JSON.parse(str);
-             obj._clientPeerId = this.localPeerId;
-             this.hostConn.send(JSON.stringify(obj));
-         }
-         return;
+
+    // Attach local screenshare tracks
+    if (localScreenStream) {
+      localScreenStream.getTracks().forEach(track => {
+        pc.addTrack(track, localScreenStream);
+      });
+    }
+
+    // ICE Candidate Handler
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendToServer({
+          action: 'relay-to',
+          to: remotePeerId,
+          data: { type: 'webrtc-ice', candidate: event.candidate }
+        });
       }
-      const msg = JSON.parse(str);
-      const hostConnMock = { peer: 'host-self' };
-      msg._clientPeerId = this.localPeerId;
-      this.mockServerHandle(hostConnMock, msg);
+    };
+
+    // Inbound Remote Track Handler
+    pc.ontrack = (event) => {
+      console.log(`[WebRTC] Inbound track from ${remotePeerId}:`, event.track.kind);
+      let stream = event.streams && event.streams[0] ? event.streams[0] : remoteStreams.get(remotePeerId);
+      if (!stream) {
+        stream = new MediaStream();
+      }
+      if (!stream.getTracks().includes(event.track)) {
+        stream.addTrack(event.track);
+      }
+      remoteStreams.set(remotePeerId, stream);
+      renderRemoteMedia(remotePeerId, stream);
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Connection state with ${remotePeerId}: ${pc.connectionState}`);
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        clearRemoteMedia(remotePeerId);
+      }
+    };
+
+    // Unified negotiation handler for both initiator and receiver renegotiations
+    pc.onnegotiationneeded = async () => {
+      try {
+        if (pc.signalingState !== 'stable') return;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sendToServer({
+          action: 'relay-to',
+          to: remotePeerId,
+          data: { type: 'webrtc-offer', sdp: pc.localDescription }
+        });
+      } catch (e) {
+        console.warn(`[WebRTC] Negotiation error with ${remotePeerId}:`, e);
+      }
+    };
+
+    if (isInitiator) {
+      // Trigger initial negotiation
+      pc.onnegotiationneeded();
     }
-    
-    close() {
-      if (this.peer) this.peer.destroy();
-      this.readyState = WebSocket.CLOSED;
-      if(this.onclose) this.onclose();
-    }
-    
-    // ----------- HOST RELAY -----------
-    mockServerHandle(conn, msg) {
-       const sendToClient = (peerId, obj) => {
-          if (peerId === 'host-self') {
-             if(this.onmessage) this.onmessage({ data: JSON.stringify(obj) });
-             return;
-          }
-          if (this.peers.has(peerId)) this.peers.get(peerId).send(JSON.stringify(obj));
-       };
-       const broadcast = (obj, excludePeerId) => {
-          const strMsg = JSON.stringify(obj);
-          for (const [pId, pConn] of this.peers.entries()) {
-             if (pId !== excludePeerId) pConn.send(strMsg);
-          }
-          if (excludePeerId !== 'host-self') {
-             if(this.onmessage) this.onmessage({ data: strMsg });
-          }
-       };
-       
-       switch(msg.action) {
-          case 'host':
-             const hId = "usr_" + this.nextServerId++;
-             this.serverClients.set('host-self', { id: hId, nickname: msg.nickname, peerJsId: this.localPeerId });
-             sendToClient('host-self', { action: 'welcome', id: hId });
-             sendToClient('host-self', { action: 'hosted' });
-             break;
-          case 'join':
-             if (this.password && msg.password !== this.password) {
-                 conn.send(JSON.stringify({ action: 'auth-fail', reason: 'Incorrect password.' }));
-                 //conn.close();
-                 return;
-             }
-             this.peers.set(conn.peer, conn);
-             const clId = "usr_" + this.nextServerId++;
-             const cPjId = msg._clientPeerId;
-             this.serverClients.set(conn.peer, { id: clId, nickname: msg.nickname, peerJsId: cPjId });
-             sendToClient(conn.peer, { action: 'welcome', id: clId });
-             // list peers
-             const peerList = Array.from(this.serverClients.values()).filter(c => c.id !== clId);
-             sendToClient(conn.peer, { action: 'joined', peers: peerList });
-             broadcast({ action: 'peer-joined', id: clId, nickname: msg.nickname, peerJsId: cPjId }, conn.peer);
-             break;
-          case 'relay':
-             const snd = this.serverClients.get(conn.peer);
-             if(snd) broadcast({ action: 'relay', from: snd.id, data: msg.data }, conn.peer);
-             break;
-          case 'dm':
-             const dSnd = this.serverClients.get(conn.peer);
-             if(dSnd) {
-                let tPeer = null;
-                for (const [pId, cl] of this.serverClients.entries()) {
-                   if (cl.id === msg.to) { tPeer = pId; break; }
-                }
-                if (tPeer) sendToClient(tPeer, { action: 'dm', from: dSnd.id, data: msg.data });
-             }
-             break;
-       }
-    }
-    
-    mockServerDisconnect(peerId) {
-       this.peers.delete(peerId);
-       const cl = this.serverClients.get(peerId);
-       if (cl) {
-          this.serverClients.delete(peerId);
-          const strMsg = JSON.stringify({ action: 'peer-left', id: cl.id });
-          for (const pc of this.peers.values()) pc.send(strMsg);
-          if (this.onmessage) this.onmessage({ data: strMsg });
-       }
+
+    return pc;
+  }
+
+  async function handleWebRTCOffer(fromId, sdp) {
+    const pc = createPeerConnection(fromId, false);
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendToServer({
+        action: 'relay-to',
+        to: fromId,
+        data: { type: 'webrtc-answer', sdp: pc.localDescription }
+      });
+    } catch (err) {
+      console.error('[WebRTC] Error handling offer:', err);
     }
   }
 
-  function connectWebSocket(address) {
-    if (window.navigator && window.navigator.mediaDevices && !window.navigator.mediaDevices.getUserMedia) {
-        window.navigator.mediaDevices.getUserMedia = () => Promise.resolve(null);
+  async function handleWebRTCAnswer(fromId, sdp) {
+    const pc = peerConnections.get(fromId);
+    if (pc && pc.signalingState !== 'closed') {
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      } catch (err) {
+        console.error('[WebRTC] Error handling answer:', err);
+      }
     }
-    
-    ws = new PeerJSRoomHub();
-    ws.onopen = () => {};
-    ws.onclose = () => handleDisconnect();
-    ws.onerror = () => {};
-    ws.onmessage = (event) => {
-        try { handleServerMessage(JSON.parse(event.data)); }
-        catch(e) {}
-    };
-    return ws.init(address);
   }
+
+  async function handleWebRTCIce(fromId, candidate) {
+    const pc = peerConnections.get(fromId);
+    if (pc && candidate && pc.signalingState !== 'closed') {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {}
+    }
+  }
+
+  async function syncTracksToAllPeers() {
+    for (const [peerId, pc] of peerConnections.entries()) {
+      if (pc.signalingState === 'closed') continue;
+
+      const senders = pc.getSenders();
+
+      // Sync local media (mic / cam)
+      if (localMediaStream) {
+        for (const track of localMediaStream.getTracks()) {
+          const sender = senders.find(s => s.track && s.track.kind === track.kind && s.track.id === track.id);
+          if (!sender) {
+            pc.addTrack(track, localMediaStream);
+          }
+        }
+      }
+
+      // Sync screenshare
+      if (localScreenStream) {
+        for (const track of localScreenStream.getTracks()) {
+          const sender = senders.find(s => s.track && s.track.id === track.id);
+          if (!sender) {
+            pc.addTrack(track, localScreenStream);
+          }
+        }
+      }
+
+      // Remove obsolete senders (stopped screen share tracks)
+      for (const sender of senders) {
+        if (!sender.track) continue;
+        const inMedia = localMediaStream && localMediaStream.getTracks().includes(sender.track);
+        const inScreen = localScreenStream && localScreenStream.getTracks().includes(sender.track);
+        if (!inMedia && !inScreen) {
+          pc.removeTrack(sender);
+        }
+      }
+
+      // Trigger renegotiation explicitly
+      try {
+        if (pc.signalingState === 'stable') {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          sendToServer({
+            action: 'relay-to',
+            to: peerId,
+            data: { type: 'webrtc-offer', sdp: pc.localDescription }
+          });
+        }
+      } catch (err) {
+        console.warn(`[WebRTC] Resync offer error with ${peerId}:`, err);
+      }
+    }
+  }
+
+  /* ================================================================
+     NETWORKING ENGINE (Tauri Native Rust Relay + WebSockets)
+     ================================================================ */
+  function connectWebSocket(wsUrl, onOpenCallback) {
+    return new Promise((resolve, reject) => {
+      let isResolved = false;
+      const timer = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          if (socket) socket.close();
+          reject(new Error('Connection timed out. Check room code.'));
+        }
+      }, CONNECT_TIMEOUT_MS);
+
+      try {
+        socket = new WebSocket(wsUrl);
+      } catch (err) {
+        clearTimeout(timer);
+        return reject(err);
+      }
+
+      socket.onopen = () => {
+        clearTimeout(timer);
+        isResolved = true;
+        if (onOpenCallback) onOpenCallback();
+        resolve();
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          handleServerMessage(msg);
+        } catch (e) {
+          console.error('[StudyRoom] Parse error:', e);
+        }
+      };
+
+      socket.onerror = () => {
+        if (!isResolved) {
+          clearTimeout(timer);
+          isResolved = true;
+          reject(new Error('Could not connect to room server.'));
+        }
+      };
+
+      socket.onclose = () => {
+        handleDisconnect();
+      };
+    });
+  }
+
   function sendToServer(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(obj));
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(obj));
     }
   }
 
@@ -389,75 +494,81 @@
     sendToServer({ action: 'relay', data });
   }
 
-  function sendToTarget(to, data) {
-    sendToServer({ action: 'relay-to', to, data });
-  }
-
   /* ================================================================
-     SERVER MESSAGE HANDLING
+     MESSAGE DISPATCHER & RELAY HANDLERS
      ================================================================ */
   function handleServerMessage(msg) {
     switch (msg.action) {
       case 'welcome':
         myId = msg.id;
+        console.log(`[StudyRoom] Assigned Client ID: ${myId}`);
         break;
 
       case 'hosted':
         sessionActive = true;
-        startStudyTimer();
+        startStudyTimerEngine();
         hideLoading();
         renderActiveSession();
-        if (typeof showNotification === 'function') {
-          const pwNote = roomPassword ? ' \uD83D\uDD12 Password protected.' : '';
-          showNotification(`Room created! Share code: ${roomAddress}${pwNote}`, 'success');
-        }
+        SoundFX.playJoin();
+        notify(`Study Room live. Code: ${roomAddress}`, 'success');
         break;
 
       case 'joined':
+        peers = {};
         if (Array.isArray(msg.peers)) {
           msg.peers.forEach(p => {
-            peers[p.id] = { nickname: p.nickname, goal: '', seconds: 0, peerJsId: p.peerJsId };
+            peers[p.id] = { nickname: p.nickname, goal: '', seconds: 0, handRaised: false, isSpeaking: false };
+            createPeerConnection(p.id, true);
           });
         }
         sessionActive = true;
-        startStudyTimer();
+        startStudyTimerEngine();
         hideLoading();
         renderActiveSession();
-        // ask existing peers for their current info
+        SoundFX.playJoin();
+
         broadcastData({ type: 'info-request' });
-        if (typeof showNotification === 'function')
-          showNotification(`Joined room!`, 'success');
+        notify('Connected to Study Room.', 'success');
         break;
 
       case 'auth-fail':
         hideLoading();
         cleanup();
         renderStudyRoom();
-        if (typeof showNotification === 'function')
-          showNotification(msg.reason || 'Authentication failed.', 'error');
+        notify(msg.reason || 'Failed to join room.', 'error');
         break;
 
       case 'peer-joined':
-        peers[msg.id] = { nickname: msg.nickname, goal: '', seconds: 0, peerJsId: msg.peerJsId };
-        addSystemMessage(`${msg.nickname} joined the room`);
+        peers[msg.id] = { nickname: msg.nickname, goal: '', seconds: 0, handRaised: false, isSpeaking: false };
+        SoundFX.playJoin();
+        addSystemMessage(`${msg.nickname} joined the room.`);
         updateParticipantsUI();
         updateProgressUI();
-        updatePeopleCount();
+
+        if (isHost) {
+          createPeerConnection(msg.id, true);
+        }
         break;
 
       case 'peer-left': {
         const leftNick = peers[msg.id]?.nickname || 'A participant';
-        addSystemMessage(`${leftNick} left the room`);
+        SoundFX.playLeave();
+        addSystemMessage(`${leftNick} left the room.`);
         delete peers[msg.id];
+        delete wbRemoteCursors[msg.id];
+        clearRemoteMedia(msg.id);
+        if (screenShareOwnerId === msg.id) {
+          setSpotlight(null);
+        }
         updateParticipantsUI();
         updateProgressUI();
-        updatePeopleCount();
+        renderRemoteCursors();
         break;
       }
 
       case 'room-closed':
-        addSystemMessage('The host has closed the room.');
-        setTimeout(() => forceLeaveRoom(), 1500);
+        notify('Host ended the study session.', 'info');
+        forceLeaveRoom();
         break;
 
       case 'relay':
@@ -466,15 +577,71 @@
     }
   }
 
-  /* ---------- relay data dispatcher ---------- */
   function handleRelayData(fromId, data) {
     if (!data || typeof data !== 'object') return;
 
     switch (data.type) {
-      case 'chat':
-        chatMessages.push({ sender: data.sender, text: data.text, time: data.time, type: 'chat' });
-        renderChatMessages();
+      /* WebRTC Signaling */
+      case 'webrtc-offer':
+        handleWebRTCOffer(fromId, data.sdp);
         break;
+
+      case 'webrtc-answer':
+        handleWebRTCAnswer(fromId, data.sdp);
+        break;
+
+      case 'webrtc-ice':
+        handleWebRTCIce(fromId, data.candidate);
+        break;
+
+      case 'screen-share-status':
+        if (data.active) {
+          setSpotlight(fromId, data.nickname || 'Participant');
+        } else if (screenShareOwnerId === fromId) {
+          setSpotlight(null);
+        }
+        break;
+
+      /* Collaboration Data */
+      case 'chat':
+        chatMessages.push({
+          senderId: data.senderId,
+          senderName: data.senderName,
+          text: data.text,
+          time: data.time,
+          type: 'chat'
+        });
+        renderChatMessages();
+        SoundFX.playPop();
+        if (activeTab !== 'chat') {
+          unreadChatCount++;
+          updateUnreadBadge();
+        }
+        break;
+
+      case 'reaction':
+        spawnFloatingReaction(data.emoji);
+        break;
+
+      case 'hand-raise':
+        if (peers[fromId]) {
+          peers[fromId].handRaised = !!data.raised;
+          updateParticipantsUI();
+          if (data.raised) {
+            SoundFX.playHandRaise();
+            notify(`${peers[fromId].nickname} raised their hand.`, 'info');
+          }
+        }
+        break;
+
+      case 'speaking':
+        if (peers[fromId]) {
+          peers[fromId].isSpeaking = !!data.speaking;
+          const tile = document.getElementById(`srTile_${fromId}`);
+          if (tile) tile.classList.toggle('sr-speaking', !!data.speaking);
+        }
+        break;
+
       case 'progress':
         if (peers[fromId]) {
           peers[fromId].goal = data.goal || '';
@@ -482,6 +649,7 @@
         }
         updateProgressUI();
         break;
+
       case 'info':
         if (peers[fromId]) {
           peers[fromId].nickname = data.nickname || peers[fromId].nickname;
@@ -491,104 +659,102 @@
         updateParticipantsUI();
         updateProgressUI();
         break;
+
       case 'info-request':
-        broadcastData({ type: 'info', nickname, goal: studyGoal, seconds: studySeconds });
+        broadcastData({ type: 'info', nickname, goal: studyGoal, seconds: timerSeconds });
+        if (localScreenStream) {
+          broadcastData({ type: 'screen-share-status', active: true, nickname });
+        }
+        if (isHost) broadcastTimerSync();
+        if (wbStrokes.length > 0 || wbQuestions.length > 0) {
+          broadcastData({ type: 'wb-full-sync', strokes: wbStrokes, questions: wbQuestions, nextId: wbNextQId });
+        }
         break;
+
+      case 'timer-sync':
+        timerMode = data.mode;
+        timerRunning = data.running;
+        timerSeconds = data.seconds;
+        timerDuration = data.duration;
+        timerRemaining = data.remaining;
+        updateTimerDisplay();
+        break;
+
+      case 'mod-mute-all':
+        if (!isHost && micActive) {
+          toggleMicrophone();
+          notify('Host muted all microphones.', 'warning');
+        }
+        break;
+
+      case 'mod-kick':
+        if (data.targetId === myId) {
+          notify('You were removed from the room by the host.', 'error');
+          forceLeaveRoom();
+        }
+        break;
+
+      case 'wb-live-draw':
+        replayLivePoints(data.points, data.color, data.size, data.tool, data.alpha);
+        break;
+
       case 'wb-stroke':
         replayStroke(data.points, data.color, data.size, data.tool, data.alpha);
         wbStrokes.push({ type: 'stroke', points: data.points, color: data.color, size: data.size, tool: data.tool, alpha: data.alpha });
-        if (data.points) maybeGrowCanvas(data.points);
+        maybeGrowCanvas(data.points);
         break;
+
+      case 'wb-shape':
+        drawShapeOnCanvas(data.shape, data.start, data.end, data.color, data.size);
+        wbStrokes.push({ type: 'shape', shape: data.shape, start: data.start, end: data.end, color: data.color, size: data.size });
+        break;
+
+      case 'wb-text':
+        drawTextOnCanvas(data.text, data.x, data.y, data.color, data.size);
+        wbStrokes.push({ type: 'text', text: data.text, x: data.x, y: data.y, color: data.color, size: data.size });
+        break;
+
+      case 'wb-cursor':
+        wbRemoteCursors[fromId] = { x: data.x, y: data.y, name: peers[fromId]?.nickname || 'Student', color: data.color || '#cf6215', lastSeen: Date.now() };
+        renderRemoteCursors();
+        break;
+
       case 'wb-clear':
         clearCanvasLocal();
         break;
-      case 'wb-block-erase':
-        replayBlockErase(data.rect);
-        wbStrokes.push({ type: 'block-erase', rect: data.rect });
+
+      case 'wb-undo':
+        undoCanvasLocal();
         break;
-      case 'wb-questions':
+
+      case 'wb-redo':
+        redoCanvasLocal();
+        break;
+
+      case 'wb-full-sync':
+        wbStrokes = data.strokes || [];
         wbQuestions = data.questions || [];
-        wbNextQId = data.nextId || wbQuestions.length + 1;
+        wbNextQId = data.nextId || (wbQuestions.length + 1);
+        replayAllStrokes();
         renderQuestionsUI();
         break;
-      case 'webrtc-offer':
-        handleRTCReceiveOffer(fromId, data.sdp);
+
+      case 'wb-questions':
+        wbQuestions = data.questions || [];
+        wbNextQId = data.nextId || (wbQuestions.length + 1);
+        renderQuestionsUI();
         break;
-      case 'webrtc-answer':
-        handleRTCReceiveAnswer(fromId, data.sdp);
-        break;
-      case 'webrtc-ice':
-        handleRTCReceiveIce(fromId, data.candidate);
-        break;
+
       case 'study-material':
         receiveStudyMaterial(fromId, data.fileData, data.fileName);
-        break;
-      case 'webrtc-stop':
-        // A peer stopped sharing
-        const grid = document.getElementById('srParticipantsGrid');
-        if (grid) {
-            const tiles = grid.querySelectorAll('.sr-video-tile:not(.sr-video-local)');
-            tiles.forEach(t => {
-               const lbl = t.querySelector('.sr-video-label');
-               if (lbl && lbl.textContent.includes(peers[fromId]?.nickname)) {
-                   const v = t.querySelector('.sr-screen-video');
-                   if (v) {
-                       v.pause();
-                       v.srcObject = null;
-                       v.removeAttribute('src');
-                       v.load();
-                       v.remove();
-                   }
-                   const off = t.querySelector('.sr-video-off');
-                   if(off && !t.querySelector('.sr-cam-video')) {
-                       off.style.display = 'flex';
-                       off.innerHTML = '<i class="fas fa-user"></i>';
-                   }
-               }
-            });
-        }
-        break;
-      case 'webrtc-media-offer':
-        handleMediaRTCReceiveOffer(fromId, data.sdp);
-        break;
-      case 'webrtc-media-answer':
-        handleMediaRTCReceiveAnswer(fromId, data.sdp);
-        break;
-      case 'webrtc-media-ice':
-        handleMediaRTCReceiveIce(fromId, data.candidate);
-        break;
-      case 'webrtc-media-stop':
-        const mgrid = document.getElementById('srParticipantsGrid');
-        if (mgrid) {
-            const mtiles = mgrid.querySelectorAll('.sr-video-tile:not(.sr-video-local)');
-            mtiles.forEach(t => {
-               const lbl = t.querySelector('.sr-video-label');
-               if (lbl && lbl.textContent.includes(peers[fromId]?.nickname)) {
-                   const cv = t.querySelector('.sr-cam-video');
-                   if (cv) {
-                       cv.pause();
-                       cv.srcObject = null;
-                       cv.removeAttribute('src');
-                       cv.load();
-                       cv.remove();
-                   }
-                   const off = t.querySelector('.sr-video-off');
-                   if(off && !t.querySelector('.sr-screen-video')) {
-                       off.style.display = 'flex';
-                       off.innerHTML = '<i class="fas fa-user"></i>';
-                   }
-               }
-            });
-        }
         break;
     }
   }
 
-  /* ---------- disconnect handler ---------- */
   function handleDisconnect() {
     if (!sessionActive) return;
-    addSystemMessage('Connection lost.');
-    setTimeout(() => forceLeaveRoom(), 1500);
+    notify('Disconnected from study room.', 'error');
+    setTimeout(() => forceLeaveRoom(), 1200);
   }
 
   /* ================================================================
@@ -604,58 +770,48 @@
     section.innerHTML = `
       <div class="sr-lobby">
         <div class="sr-lobby-header">
-          <h2 class="section-title">Study Room</h2>
-          <span class="sr-exp-badge">experimental</span>
-          <div class="sr-lobby-icon"><i class="fas fa-users"></i></div>
-          <p class="sr-lobby-subtitle">Study together with friends in real-time across the internet via a relay server.</p>
+          <h2 class="section-title"><i class="fas fa-users"></i>Study Room</h2>
+          <span class="sr-exp-badge">High-Speed Relay Mesh</span>
+          <div class="sr-lobby-icon"><i class="fas fa-graduation-cap"></i></div>
+          <p class="sr-lobby-subtitle">Collaborate live with real-time video, screen sharing, interactive whiteboard, synced timers & chat.</p>
         </div>
 
         <div class="sr-lobby-cards">
-          <!-- Nickname -->
           <div class="sr-lobby-card">
-            <h3><i class="fas fa-user-edit"></i> Your Display Name</h3>
-            <input type="text" id="srNickname" class="sr-input" placeholder="Enter your name…" maxlength="24" value="${savedNick}">
+            <h3><i class="fas fa-user-circle"></i> Display Name</h3>
+            <input type="text" id="srNickname" class="sr-input" placeholder="Enter your name…" maxlength="24" value="${escapeHTML(savedNick)}">
           </div>
 
-          <!-- Create -->
           <div class="sr-lobby-card sr-card-create">
-            <h3><i class="fas fa-plus-circle"></i> Create a Room</h3>
-            <p>Create an internet room and share the 10-character code.</p>
+            <h3><i class="fas fa-plus-circle"></i> Create Room</h3>
+            <p>Host a study room and share your 10-digit code with your group.</p>
 
             <div class="sr-pw-row">
               <input type="password" id="srCreatePassword" class="sr-input" placeholder="Room password (optional)" maxlength="32" autocomplete="off">
-              <button type="button" class="sr-pw-toggle" id="srCreatePwToggle" title="Show password"><i class="fas fa-eye"></i></button>
+              <button type="button" class="sr-pw-toggle" id="srCreatePwToggle" title="Toggle password"><i class="fas fa-eye"></i></button>
             </div>
             <button class="sr-btn sr-btn-primary" id="srCreateBtn"><i class="fas fa-door-open"></i> Create Room</button>
           </div>
 
-          <!-- Join -->
           <div class="sr-lobby-card sr-card-join">
-            <h3><i class="fas fa-sign-in-alt"></i> Join a Room</h3>
-            <p>Enter the room code shared by the host.</p>
+            <h3><i class="fas fa-sign-in-alt"></i> Join Room</h3>
+            <p>Enter the 10-digit room code shared by your study partner.</p>
             <div class="sr-join-row">
-              <input type="text" id="srJoinAddress" class="sr-input" placeholder="10-character room code" spellcheck="false" autocomplete="off" style="flex:1;letter-spacing:0.08em;">
-              <button class="sr-btn sr-btn-accent" id="srJoinBtn"><i class="fas fa-sign-in-alt"></i> Join</button>
+              <input type="text" id="srJoinAddress" class="sr-input sr-code-input" placeholder="4SNELCGW9X" spellcheck="false" autocomplete="off" maxlength="10">
+              <button class="sr-btn sr-btn-accent" id="srJoinBtn"><i class="fas fa-arrow-right"></i> Join</button>
             </div>
             <div class="sr-pw-row" style="margin-top:0.5rem;">
-              <input type="password" id="srJoinPassword" class="sr-input" placeholder="Room password (if required)" maxlength="32" autocomplete="off">
-              <button type="button" class="sr-pw-toggle" id="srJoinPwToggle" title="Show password"><i class="fas fa-eye"></i></button>
+              <input type="password" id="srJoinPassword" class="sr-input" placeholder="Password (if required)" maxlength="32" autocomplete="off">
+              <button type="button" class="sr-pw-toggle" id="srJoinPwToggle" title="Toggle password"><i class="fas fa-eye"></i></button>
             </div>
-            <small class="sr-join-hint"> <code>10-character alphanumeric code</code></small>
           </div>
         </div>
-
-
+      </div>
     `;
 
-    /* listeners */
-    const createBtn = document.getElementById('srCreateBtn');
-    const joinBtn = document.getElementById('srJoinBtn');
-    const joinInput = document.getElementById('srJoinAddress');
-
-    createBtn && createBtn.addEventListener('click', () => handleCreate());
-    joinBtn && joinBtn.addEventListener('click', () => handleJoin());
-    joinInput && joinInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleJoin(); });
+    document.getElementById('srCreateBtn')?.addEventListener('click', handleCreate);
+    document.getElementById('srJoinBtn')?.addEventListener('click', handleJoin);
+    document.getElementById('srJoinAddress')?.addEventListener('keydown', e => { if (e.key === 'Enter') handleJoin(); });
 
     setupPwToggle('srCreatePwToggle', 'srCreatePassword');
     setupPwToggle('srJoinPwToggle', 'srJoinPassword');
@@ -679,23 +835,37 @@
     const section = document.getElementById('studyRoomSection');
     if (!section) return;
 
-    const participantsList = buildParticipantsHTML();
-
     section.innerHTML = `
       <div class="sr-session">
-        <!-- Top bar -->
+        <!-- Top Toolbar -->
         <div class="sr-session-bar">
           <div class="sr-session-bar-left">
-            <span class="sr-mode-badge sr-mode-inet" title="Connected via internet relay">
-              <i class="fas fa-globe"></i> Internet
-            </span>
+            <span class="sr-mode-badge sr-mode-inet"><i class="fas fa-bolt"></i> Live</span>
             <span class="sr-room-code-badge" title="Click to copy room code" id="srCopyCode">
               <i class="fas fa-key"></i> ${escapeHTML(roomAddress)}
             </span>
-            ${roomPassword ? `<span class="sr-pw-badge" title="Room is password-protected"><i class="fas fa-lock"></i> Password: <span class="sr-pw-hidden" id="srPwReveal">••••••</span></span>` : `<span class="sr-pw-badge sr-pw-open" title="No password"><i class="fas fa-lock-open"></i> No password</span>`}
-            <span class="sr-session-timer" id="srSessionTimer">${fmtTime(studySeconds)}</span>
+            ${roomPassword ? `<span class="sr-pw-badge"><i class="fas fa-lock"></i> <span class="sr-pw-hidden" id="srPwReveal">••••••</span></span>` : `<span class="sr-pw-badge sr-pw-open"><i class="fas fa-lock-open"></i> Public</span>`}
+            ${isHost ? `<button class="sr-btn sr-btn-sm ${roomLocked ? 'sr-btn-primary' : 'sr-btn-secondary'}" id="srLockToggle" title="Lock/Unlock Room"><i class="fas fa-${roomLocked ? 'lock' : 'lock-open'}"></i></button>` : ''}
           </div>
+
+          <!-- UNIFIED TIMER & POMODORO BAR -->
+          <div class="sr-pomo-bar" id="srPomoBar">
+            <button class="sr-pomo-mode-btn" id="srPomoToggleMode" title="Cycle Mode (Stopwatch / Focus / Break / Long Break)">
+              <i class="fas fa-stopwatch"></i>
+            </button>
+            <span class="sr-pomo-timer" id="srPomoTimer">00:00</span>
+            <button class="sr-pomo-ctrl-btn" id="srPomoPlayPause" title="Start / Pause Timer">
+              <i class="fas fa-play"></i>
+            </button>
+            <button class="sr-pomo-ctrl-btn" id="srPomoReset" title="Reset Timer">
+              <i class="fas fa-redo"></i>
+            </button>
+          </div>
+
           <div class="sr-session-bar-right">
+            <button class="sr-ctrl-btn ${handRaised ? 'sr-ctrl-active' : ''}" id="srRaiseHandBtn" title="Raise Hand">
+              <i class="fas fa-hand-paper"></i>
+            </button>
             <button class="sr-ctrl-btn" id="srToggleMic" title="Toggle Microphone">
               <i class="fas fa-microphone-slash" style="color: #ef4444;"></i>
             </button>
@@ -705,76 +875,93 @@
             <button class="sr-ctrl-btn" id="srToggleScreenShare" title="Share Screen">
               <i class="fas fa-desktop"></i>
             </button>
-            <button class="sr-ctrl-btn ${wbActive ? 'sr-ctrl-active' : ''}" id="srToggleWB" title="${wbActive ? 'Close Whiteboard' : 'Open Whiteboard'}">
+            <button class="sr-ctrl-btn ${wbActive ? 'sr-ctrl-active' : ''}" id="srToggleWB" title="Toggle Whiteboard">
               <i class="fas fa-chalkboard"></i>
             </button>
+            ${isHost ? `<button class="sr-ctrl-btn" id="srMuteAllBtn" title="Mute All"><i class="fas fa-volume-mute"></i></button>` : ''}
             <button class="sr-ctrl-btn sr-ctrl-danger" id="srLeaveBtn" title="Leave room">
               <i class="fas fa-phone-slash"></i>
             </button>
           </div>
         </div>
 
-        <!-- Main layout -->
         <div class="sr-session-body">
-          <!-- Participant cards area (replaces video grid) -->
+          <!-- Video Area -->
           <div class="sr-video-area" id="srParticipantArea">
-            <div class="sr-video-grid" id="srParticipantsGrid">
-              ${buildParticipantCardsHTML()}
+            <!-- Spotlight / Screen Share Stage -->
+            <div class="sr-spotlight-stage" id="srSpotlightStage" style="display: none;">
+              <video class="sr-spotlight-video" id="srSpotlightVideo" autoplay playsinline></video>
+              <div class="sr-spotlight-overlay" id="srSpotlightOverlay">
+                <span id="srSpotlightLabel">Screen Share</span>
+                <button class="sr-btn sr-btn-sm sr-btn-secondary" id="srSpotlightFullscreen" title="Fullscreen"><i class="fas fa-expand"></i></button>
+              </div>
+            </div>
+
+            <!-- Participant Grid -->
+            <div class="sr-video-grid sr-grid-1" id="srParticipantsGrid"></div>
+            
+            <!-- Quick Reactions Bar -->
+            <div class="sr-reactions-bar">
+              <button class="sr-react-btn" data-emoji="👏" title="Clap">👏</button>
+              <button class="sr-react-btn" data-emoji="🔥" title="Fire">🔥</button>
+              <button class="sr-react-btn" data-emoji="💡" title="Idea">💡</button>
+              <button class="sr-react-btn" data-emoji="👍" title="Thumbs Up">👍</button>
+              <button class="sr-react-btn" data-emoji="❤️" title="Heart">❤️</button>
+              <button class="sr-react-btn" data-emoji="☕" title="Coffee Break">☕</button>
             </div>
           </div>
 
-          <!-- Whiteboard (hidden by default) -->
+          <!-- Whiteboard Panel -->
           <div class="sr-wb-panel" id="srWhiteboardPanel" style="display:none;">
             <div class="sr-wb-toolbar">
               <div class="sr-wb-tools">
-                <button class="sr-wb-tool-btn" data-tool="pan" title="Pan (drag to move)"><i class="fas fa-hand-paper"></i></button>
+                <button class="sr-wb-tool-btn" data-tool="pan" title="Pan (Hold Space)"><i class="fas fa-hand-paper"></i></button>
                 <button class="sr-wb-tool-btn active" data-tool="pen" title="Pen"><i class="fas fa-pen"></i></button>
                 <button class="sr-wb-tool-btn" data-tool="highlighter" title="Highlighter"><i class="fas fa-highlighter"></i></button>
+                <button class="sr-wb-tool-btn" data-tool="line" title="Line"><i class="fas fa-slash"></i></button>
+                <button class="sr-wb-tool-btn" data-tool="arrow" title="Arrow"><i class="fas fa-long-arrow-alt-right"></i></button>
+                <button class="sr-wb-tool-btn" data-tool="rect" title="Rectangle"><i class="far fa-square"></i></button>
+                <button class="sr-wb-tool-btn" data-tool="circle" title="Circle"><i class="far fa-circle"></i></button>
+                <button class="sr-wb-tool-btn" data-tool="text" title="Text Tool"><i class="fas fa-font"></i></button>
                 <button class="sr-wb-tool-btn" data-tool="eraser" title="Eraser"><i class="fas fa-eraser"></i></button>
-                <button class="sr-wb-tool-btn" data-tool="block-erase" title="Block Erase"><i class="fas fa-vector-square"></i></button>
+                
                 <div class="sr-wb-sep"></div>
-                <input type="color" id="srWbColor" class="sr-wb-color-pick" value="${wbColor}" title="Brush color">
+                <input type="color" id="srWbColor" class="sr-wb-color-pick" value="${wbColor}">
                 <div class="sr-wb-range-group" id="srWbPenSizeGroup">
                   <label>Size</label>
-                  <input type="range" id="srWbPenSize" min="1" max="30" value="${wbPenSize}" class="sr-wb-range">
+                  <input type="range" id="srWbPenSize" min="1" max="40" value="${wbPenSize}" class="sr-wb-range">
                   <span id="srWbPenSizeVal">${wbPenSize}</span>
                 </div>
-                <div class="sr-wb-range-group" id="srWbEraserSizeGroup" style="display:none;">
-                  <label>Size</label>
-                  <input type="range" id="srWbEraserSize" min="5" max="80" value="${wbEraserSize}" class="sr-wb-range">
-                  <span id="srWbEraserSizeVal">${wbEraserSize}</span>
-                </div>
-                <div class="sr-wb-range-group" id="srWbHlSizeGroup" style="display:none;">
-                  <label>Size</label>
-                  <input type="range" id="srWbHlSize" min="5" max="50" value="${wbHighlighterSize}" class="sr-wb-range">
-                  <span id="srWbHlSizeVal">${wbHighlighterSize}</span>
-                </div>
+                
                 <div class="sr-wb-sep"></div>
-                <button class="sr-wb-tool-btn" id="srWbUndo" title="Undo (Ctrl+Z)"><i class="fas fa-undo"></i></button>
-                <button class="sr-wb-tool-btn" id="srWbRedo" title="Redo (Ctrl+Y)"><i class="fas fa-redo"></i></button>
+                <button class="sr-wb-tool-btn" id="srWbGridToggle" title="Toggle Grid"><i class="fas fa-border-all"></i></button>
+                <button class="sr-wb-tool-btn" id="srWbUndo" title="Undo"><i class="fas fa-undo"></i></button>
+                <button class="sr-wb-tool-btn" id="srWbRedo" title="Redo"><i class="fas fa-redo"></i></button>
                 <button class="sr-wb-tool-btn" id="srWbClear" title="Clear board"><i class="fas fa-trash"></i></button>
               </div>
+
               <div class="sr-wb-actions">
                 <div class="sr-wb-zoom-group">
-                  <button class="sr-wb-tool-btn" id="srWbZoomOut" title="Zoom Out"><i class="fas fa-search-minus"></i></button>
+                  <button class="sr-wb-tool-btn" id="srWbZoomOut"><i class="fas fa-search-minus"></i></button>
                   <span class="sr-wb-zoom-label" id="srWbZoomLabel">100%</span>
-                  <button class="sr-wb-tool-btn" id="srWbZoomIn" title="Zoom In"><i class="fas fa-search-plus"></i></button>
+                  <button class="sr-wb-tool-btn" id="srWbZoomIn"><i class="fas fa-search-plus"></i></button>
                   <button class="sr-wb-tool-btn" id="srWbZoomReset" title="Reset View"><i class="fas fa-compress-arrows-alt"></i></button>
                 </div>
                 <div class="sr-wb-sep"></div>
                 <button class="sr-wb-tool-btn" id="srWbFullscreen" title="Fullscreen"><i class="fas fa-expand"></i></button>
-                <button class="sr-wb-tool-btn" id="srWbDownload" title="Download as PNG"><i class="fas fa-download"></i></button>
+                <button class="sr-wb-tool-btn" id="srWbDownload" title="Download PNG"><i class="fas fa-download"></i></button>
                 <button class="sr-wb-tool-btn" id="srWbSaveLib" title="Save to Library"><i class="fas fa-save"></i></button>
               </div>
             </div>
+
             <div class="sr-wb-body">
-              <div class="sr-wb-canvas-wrap" id="srWbCanvasWrap">
+              <div class="sr-wb-canvas-wrap" id="srWbCanvasWrap" style="touch-action: none !important;">
                 <canvas id="srWbCanvas"></canvas>
                 <canvas id="srWbOverlay"></canvas>
               </div>
               <div class="sr-wb-questions">
                 <div class="sr-wb-q-header">
-                  <h4><i class="fas fa-clipboard-list"></i> Questions</h4>
+                  <h4><i class="fas fa-clipboard-list"></i> Questions & Notes</h4>
                   <button class="sr-btn sr-btn-primary sr-btn-sm" id="srWbAddQ"><i class="fas fa-plus"></i> Add</button>
                 </div>
                 <div class="sr-wb-q-list" id="srWbQList"></div>
@@ -785,17 +972,22 @@
           <!-- Sidebar -->
           <div class="sr-sidebar" id="srSidebar">
             <div class="sr-sidebar-tabs">
-              <button class="sr-tab-btn active" data-tab="chat"><i class="fas fa-comments"></i> Chat</button>
-              <button class="sr-tab-btn" data-tab="participants"><i class="fas fa-users"></i> People <span class="sr-count" id="srPeopleCount">${1 + Object.keys(peers).length}</span></button>
-              <button class="sr-tab-btn" data-tab="progress"><i class="fas fa-tasks"></i> Progress</button>
+              <button class="sr-tab-btn active" data-tab="chat">
+                <i class="fas fa-comments"></i> Chat
+                <span class="sr-count" id="srUnreadBadge" style="display:none;">0</span>
+              </button>
+              <button class="sr-tab-btn" data-tab="participants">
+                <i class="fas fa-users"></i> People 
+                <span class="sr-count" id="srPeopleCount">${1 + Object.keys(peers).length}</span>
+              </button>
+              <button class="sr-tab-btn" data-tab="progress"><i class="fas fa-tasks"></i> Goals</button>
             </div>
 
-            <!-- Chat panel -->
             <div class="sr-tab-panel active" id="srTabChat">
               <div class="sr-chat-messages" id="srChatMessages"></div>
-              <div class="sr-chat-input-row" style="position:relative;">
-                <input type="file" id="srMaterialFile" style="display:none;" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" />
-                <button class="sr-btn sr-btn-secondary sr-btn-icon" id="srShareMaterial" title="Share Material" style="margin-right: 0.25rem;">
+              <div class="sr-chat-input-row">
+                <input type="file" id="srMaterialFile" style="display:none;" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.txt" />
+                <button class="sr-btn sr-btn-secondary sr-btn-icon" id="srShareMaterial" title="Share Document / Image">
                    <i class="fas fa-paperclip"></i>
                 </button>
                 <input type="text" id="srChatInput" class="sr-input" placeholder="Type a message…" maxlength="500">
@@ -803,17 +995,15 @@
               </div>
             </div>
 
-            <!-- Participants panel -->
             <div class="sr-tab-panel" id="srTabParticipants">
-              <div id="srParticipantsList">${participantsList}</div>
+              <div id="srParticipantsList">${buildParticipantsHTML()}</div>
             </div>
 
-            <!-- Progress panel -->
             <div class="sr-tab-panel" id="srTabProgress">
               <div class="sr-progress-self">
-                <h4>Your study goal</h4>
-                <input type="text" id="srGoalInput" class="sr-input" placeholder="What are you studying?" value="${escapeHTML(studyGoal)}" maxlength="80">
-                <button class="sr-btn sr-btn-accent sr-btn-sm" id="srSetGoal">Set Goal</button>
+                <h4>Your Study Goal</h4>
+                <input type="text" id="srGoalInput" class="sr-input" placeholder="What are you studying right now?" value="${escapeHTML(studyGoal)}" maxlength="80">
+                <button class="sr-btn sr-btn-accent sr-btn-sm" id="srSetGoal" style="margin-top:0.4rem;width:100%;justify-content:center;">Set Goal</button>
               </div>
               <div class="sr-progress-list" id="srProgressList">
                 ${buildProgressHTML()}
@@ -826,41 +1016,32 @@
 
     attachSessionListeners();
     renderChatMessages();
-    updateVideoGridLayout();
+    updateParticipantsUI();
+    updateTimerDisplay();
   }
 
-  /* ---------- build helpers ---------- */
   function buildParticipantsHTML() {
-    let html = `<div class="sr-participant-item">
-      <div class="sr-participant-avatar"><i class="fas fa-user"></i></div>
-      <div class="sr-participant-info">
-        <span class="sr-participant-name">${escapeHTML(nickname)} (You)${isHost ? ' <i class="fas fa-crown sr-host-icon" title="Host"></i>' : ''}</span>
-        <span class="sr-participant-status"><i class="fas fa-circle sr-status-on"></i> Connected</span>
-      </div>
-    </div>`;
-    Object.values(peers).forEach(p => {
-      html += `<div class="sr-participant-item">
+    let html = `
+      <div class="sr-participant-item">
         <div class="sr-participant-avatar"><i class="fas fa-user"></i></div>
         <div class="sr-participant-info">
-          <span class="sr-participant-name">${escapeHTML(p.nickname || 'Participant')}</span>
+          <span class="sr-participant-name">${escapeHTML(nickname)} (You)${isHost ? ' <i class="fas fa-crown sr-host-icon" title="Host"></i>' : ''}${handRaised ? ' <i class="fas fa-hand-paper" style="color:var(--accent,#cf6215);margin-left:4px;"></i>' : ''}</span>
           <span class="sr-participant-status"><i class="fas fa-circle sr-status-on"></i> Connected</span>
         </div>
       </div>`;
-    });
-    return html;
-  }
-
-  function buildParticipantCardsHTML() {
-    let html = `
-      <div class="sr-video-tile sr-video-local" style="display:flex;align-items:center;justify-content:center;flex-direction:column;">
-        <div class="sr-video-off" style="position:relative;display:flex;"><i class="fas fa-user"></i></div>
-        <div class="sr-video-label">${escapeHTML(nickname)} (You)${isHost ? ' <i class="fas fa-crown" style="color:#f5c842;margin-left:4px;" title="Host"></i>' : ''}</div>
-      </div>`;
-    Object.entries(peers).forEach(([pid, p]) => {
+    Object.entries(peers).forEach(([id, p]) => {
       html += `
-        <div class="sr-video-tile" style="display:flex;align-items:center;justify-content:center;flex-direction:column;">
-          <div class="sr-video-off" style="position:relative;display:flex;"><i class="fas fa-user"></i></div>
-          <div class="sr-video-label">${escapeHTML(p.nickname || 'Participant')}</div>
+        <div class="sr-participant-item">
+          <div class="sr-participant-avatar"><i class="fas fa-user"></i></div>
+          <div class="sr-participant-info">
+            <span class="sr-participant-name">${escapeHTML(p.nickname || 'Student')}${p.handRaised ? ' <i class="fas fa-hand-paper" style="color:var(--accent,#cf6215);margin-left:4px;"></i>' : ''}</span>
+            <span class="sr-participant-status"><i class="fas fa-circle sr-status-on"></i> Connected</span>
+          </div>
+          ${isHost ? `
+            <div class="sr-participant-actions">
+              <button class="sr-btn sr-btn-sm sr-btn-danger sr-btn-icon" onclick="window.srKickUser('${id}')" title="Kick participant"><i class="fas fa-user-slash"></i></button>
+            </div>
+          ` : ''}
         </div>`;
     });
     return html;
@@ -868,84 +1049,657 @@
 
   function buildProgressHTML() {
     let html = '';
-    html += `<div class="sr-progress-item">
-      <div class="sr-progress-user"><i class="fas fa-user"></i> ${escapeHTML(nickname)} (You)</div>
-      <div class="sr-progress-goal">${studyGoal ? escapeHTML(studyGoal) : '<em>No goal set</em>'}</div>
-      <div class="sr-progress-time"><i class="fas fa-clock"></i> ${fmtTime(studySeconds)}</div>
-    </div>`;
-    Object.values(peers).forEach(p => {
-      html += `<div class="sr-progress-item">
-        <div class="sr-progress-user"><i class="fas fa-user"></i> ${escapeHTML(p.nickname || 'Participant')}</div>
-        <div class="sr-progress-goal">${p.goal ? escapeHTML(p.goal) : '<em>No goal set</em>'}</div>
-        <div class="sr-progress-time"><i class="fas fa-clock"></i> ${fmtTime(p.seconds || 0)}</div>
+    html += `
+      <div class="sr-progress-item">
+        <div class="sr-progress-user"><i class="fas fa-user"></i> ${escapeHTML(nickname)} (You)</div>
+        <div class="sr-progress-goal">${studyGoal ? escapeHTML(studyGoal) : '<em>No goal set</em>'}</div>
+        <div class="sr-progress-time"><i class="fas fa-clock"></i> <span class="sr-my-goal-timer">${fmtTime(timerMode === 'stopwatch' ? timerSeconds : timerRemaining)}</span></div>
       </div>`;
+    Object.values(peers).forEach(p => {
+      html += `
+        <div class="sr-progress-item">
+          <div class="sr-progress-user"><i class="fas fa-user"></i> ${escapeHTML(p.nickname || 'Student')}</div>
+          <div class="sr-progress-goal">${p.goal ? escapeHTML(p.goal) : '<em>No goal set</em>'}</div>
+          <div class="sr-progress-time"><i class="fas fa-clock"></i> ${fmtTime(p.seconds || 0)}</div>
+        </div>`;
     });
     return html;
   }
 
-  /* ---------- attach listeners in session ---------- */
+  function setSpotlight(ownerId, ownerName = '') {
+    screenShareOwnerId = ownerId;
+    const stage = document.getElementById('srSpotlightStage');
+    const video = document.getElementById('srSpotlightVideo');
+    const label = document.getElementById('srSpotlightLabel');
+    const area = document.getElementById('srParticipantArea');
+
+    if (!stage || !video || !area) return;
+
+    if (!ownerId) {
+      stage.style.display = 'none';
+      video.pause();
+      video.srcObject = null;
+      area.classList.remove('sr-has-spotlight');
+      return;
+    }
+
+    area.classList.add('sr-has-spotlight');
+    stage.style.display = 'flex';
+
+    if (ownerId === 'self') {
+      video.srcObject = localScreenStream;
+      video.muted = true;
+      if (label) label.textContent = `${escapeHTML(nickname)} (Your Screen)`;
+    } else {
+      const stream = remoteStreams.get(ownerId);
+      if (stream) {
+        video.srcObject = stream;
+        video.muted = true;
+      }
+      if (label) label.textContent = `${escapeHTML(ownerName || peers[ownerId]?.nickname || 'Participant')}'s Screen`;
+    }
+
+    video.play().catch(e => console.warn('[Spotlight] Autoplay notice:', e));
+  }
+
+  function syncVideoTiles() {
+    const grid = document.getElementById('srParticipantsGrid');
+    if (!grid) return;
+
+    const currentTileIds = new Set(['srTile_self']);
+    Object.keys(peers).forEach(uId => currentTileIds.add(`srTile_${uId}`));
+
+    // 1. Local Tile
+    let selfTile = document.getElementById('srTile_self');
+    if (!selfTile) {
+      selfTile = document.createElement('div');
+      selfTile.className = 'sr-video-tile sr-video-local';
+      selfTile.id = 'srTile_self';
+      selfTile.innerHTML = `
+        <div class="sr-video-off"><i class="fas fa-user"></i></div>
+        <div class="sr-video-label">${escapeHTML(nickname)} (You)${isHost ? ' <i class="fas fa-crown" style="color:#f59e0b;"></i>' : ''}</div>
+        <div class="sr-tile-hand" style="display:${handRaised ? 'block' : 'none'};"><i class="fas fa-hand-paper"></i></div>
+      `;
+      grid.appendChild(selfTile);
+    } else {
+      const label = selfTile.querySelector('.sr-video-label');
+      if (label) label.innerHTML = `${escapeHTML(nickname)} (You)${isHost ? ' <i class="fas fa-crown" style="color:#f59e0b;"></i>' : ''}`;
+      const hand = selfTile.querySelector('.sr-tile-hand');
+      if (hand) hand.style.display = handRaised ? 'block' : 'none';
+    }
+
+    // 2. Remote Peer Tiles
+    Object.entries(peers).forEach(([uId, p]) => {
+      const tileId = `srTile_${uId}`;
+      let tile = document.getElementById(tileId);
+      if (!tile) {
+        tile = document.createElement('div');
+        tile.className = 'sr-video-tile';
+        tile.id = tileId;
+        tile.innerHTML = `
+          <div class="sr-video-off"><i class="fas fa-user"></i></div>
+          <div class="sr-video-label">${escapeHTML(p.nickname || 'Student')}</div>
+          <div class="sr-tile-hand" style="display:${p.handRaised ? 'block' : 'none'};"><i class="fas fa-hand-paper"></i></div>
+        `;
+        grid.appendChild(tile);
+
+        const stream = remoteStreams.get(uId);
+        if (stream) {
+          renderRemoteMedia(uId, stream);
+        }
+      } else {
+        const label = tile.querySelector('.sr-video-label');
+        if (label) label.textContent = p.nickname || 'Student';
+        const hand = tile.querySelector('.sr-tile-hand');
+        if (hand) hand.style.display = p.handRaised ? 'block' : 'none';
+        tile.classList.toggle('sr-speaking', !!p.isSpeaking);
+      }
+    });
+
+    // Cleanup abandoned tiles
+    Array.from(grid.children).forEach(tile => {
+      if (tile.id && !currentTileIds.has(tile.id)) {
+        tile.remove();
+      }
+    });
+
+    // Dynamic grid classes
+    const totalTiles = grid.children.length;
+    grid.classList.remove('sr-grid-1', 'sr-grid-2', 'sr-grid-3', 'sr-grid-4plus');
+    if (totalTiles <= 1) grid.classList.add('sr-grid-1');
+    else if (totalTiles === 2) grid.classList.add('sr-grid-2');
+    else if (totalTiles <= 4) grid.classList.add('sr-grid-3');
+    else grid.classList.add('sr-grid-4plus');
+  }
+
+  /* ================================================================
+     TIMER & POMODORO CONTROLS
+     ================================================================ */
+  function startStudyTimerEngine() {
+    if (mainInterval) clearInterval(mainInterval);
+
+    mainInterval = setInterval(() => {
+      if (!sessionActive) return;
+      totalUptimeSeconds++;
+
+      if (timerRunning) {
+        if (timerMode === 'stopwatch') {
+          timerSeconds++;
+        } else {
+          if (timerRemaining > 0) {
+            timerRemaining--;
+            if (timerRemaining === 0) {
+              timerRunning = false;
+              SoundFX.playChime();
+              notify(timerMode === 'focus' ? 'Focus session complete! Time for a break.' : 'Break complete! Back to study.', 'success');
+              if (timerMode === 'focus') {
+                timerMode = 'break';
+                timerDuration = 5 * 60;
+                timerRemaining = 5 * 60;
+              } else {
+                timerMode = 'focus';
+                timerDuration = 25 * 60;
+                timerRemaining = 25 * 60;
+              }
+            }
+          }
+        }
+      }
+
+      updateTimerDisplay();
+
+      document.querySelectorAll('.sr-my-goal-timer').forEach(el => {
+        el.textContent = fmtTime(timerMode === 'stopwatch' ? timerSeconds : timerRemaining);
+      });
+
+      if (totalUptimeSeconds % 8 === 0) {
+        broadcastData({
+          type: 'progress',
+          goal: studyGoal,
+          seconds: timerMode === 'stopwatch' ? timerSeconds : timerRemaining
+        });
+        updateProgressUI();
+      }
+    }, 1000);
+  }
+
+  function toggleTimerPlayPause() {
+    timerRunning = !timerRunning;
+    broadcastTimerSync();
+    updateTimerDisplay();
+  }
+
+  function resetTimer() {
+    timerRunning = false;
+    if (timerMode === 'stopwatch') timerSeconds = 0;
+    else timerRemaining = timerDuration;
+    broadcastTimerSync();
+    updateTimerDisplay();
+  }
+
+  function cycleTimerMode() {
+    if (timerMode === 'stopwatch') {
+      timerMode = 'focus';
+      timerDuration = 25 * 60;
+      timerRemaining = 25 * 60;
+    } else if (timerMode === 'focus') {
+      timerMode = 'break';
+      timerDuration = 5 * 60;
+      timerRemaining = 5 * 60;
+    } else if (timerMode === 'break') {
+      timerMode = 'long_break';
+      timerDuration = 15 * 60;
+      timerRemaining = 15 * 60;
+    } else {
+      timerMode = 'stopwatch';
+      timerSeconds = 0;
+    }
+
+    timerRunning = false;
+    broadcastTimerSync();
+    updateTimerDisplay();
+  }
+
+  function broadcastTimerSync() {
+    broadcastData({
+      type: 'timer-sync',
+      mode: timerMode,
+      running: timerRunning,
+      seconds: timerSeconds,
+      duration: timerDuration,
+      remaining: timerRemaining
+    });
+  }
+
+  function updateTimerDisplay() {
+    const timerEl = document.getElementById('srPomoTimer');
+    const playBtn = document.getElementById('srPomoPlayPause');
+    const modeBtn = document.getElementById('srPomoToggleMode');
+
+    if (timerEl) {
+      const displayVal = timerMode === 'stopwatch' ? timerSeconds : timerRemaining;
+      timerEl.textContent = fmtTime(displayVal);
+      timerEl.style.color = timerMode === 'focus' ? 'var(--accent, #cf6215)' : (timerMode.includes('break') ? '#10b981' : 'var(--fg)');
+    }
+
+    if (playBtn) {
+      playBtn.innerHTML = `<i class="fas fa-${timerRunning ? 'pause' : 'play'}"></i>`;
+    }
+
+    if (modeBtn) {
+      let icon = 'stopwatch';
+      if (timerMode === 'focus') icon = 'brain';
+      else if (timerMode === 'break') icon = 'coffee';
+      else if (timerMode === 'long_break') icon = 'umbrella-beach';
+      modeBtn.innerHTML = `<i class="fas fa-${icon}"></i>`;
+    }
+  }
+
+  /* ================================================================
+     SESSION LISTENERS
+     ================================================================ */
   function attachSessionListeners() {
-    // Copy room code
-    const copyCodeBtn = document.getElementById('srCopyCode');
-    copyCodeBtn && copyCodeBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(roomAddress).then(() => {
-        if (typeof showNotification === 'function') showNotification('Room code copied!', 'success');
+    document.getElementById('srCopyCode')?.addEventListener('click', () => {
+      navigator.clipboard.writeText(roomAddress).then(() => notify('Room code copied to clipboard!', 'success')).catch(() => {
+        prompt('Room Code:', roomAddress);
       });
     });
 
-    // Password reveal on click
     const pwReveal = document.getElementById('srPwReveal');
     if (pwReveal && roomPassword) {
       pwReveal.style.cursor = 'pointer';
-      pwReveal.title = 'Click to toggle visibility';
       pwReveal.addEventListener('click', () => {
-        const hidden = pwReveal.textContent === '••••••';
-        pwReveal.textContent = hidden ? roomPassword : '••••••';
+        pwReveal.textContent = pwReveal.textContent === '••••••' ? roomPassword : '••••••';
       });
     }
 
-    // Leave
-    document.getElementById('srLeaveBtn')?.addEventListener('click', leaveRoom);
+    document.getElementById('srSpotlightFullscreen')?.addEventListener('click', () => {
+      const stage = document.getElementById('srSpotlightStage');
+      if (!document.fullscreenElement) stage?.requestFullscreen().catch(() => {});
+      else document.exitFullscreen().catch(() => {});
+    });
 
-    // Chat
+    document.getElementById('srRaiseHandBtn')?.addEventListener('click', toggleRaiseHand);
+    document.getElementById('srLeaveBtn')?.addEventListener('click', leaveRoom);
     document.getElementById('srChatSend')?.addEventListener('click', sendChatMessage);
     document.getElementById('srChatInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') sendChatMessage(); });
     document.getElementById('srShareMaterial')?.addEventListener('click', handleShareMaterial);
-
-    // Screenshare & Media
+    
     document.getElementById('srToggleScreenShare')?.addEventListener('click', toggleScreenShare);
     document.getElementById('srToggleMic')?.addEventListener('click', toggleMicrophone);
     document.getElementById('srToggleCamera')?.addEventListener('click', toggleCamera);
+    document.getElementById('srToggleWB')?.addEventListener('click', toggleWhiteboard);
 
-    // Sidebar tabs
+    document.getElementById('srPomoToggleMode')?.addEventListener('click', cycleTimerMode);
+    document.getElementById('srPomoPlayPause')?.addEventListener('click', toggleTimerPlayPause);
+    document.getElementById('srPomoReset')?.addEventListener('click', resetTimer);
+
     document.querySelectorAll('.sr-tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.sr-tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.sr-tab-panel').forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
-        const panel = document.getElementById('srTab' + capitalize(btn.dataset.tab));
+        activeTab = btn.dataset.tab;
+        if (activeTab === 'chat') {
+          unreadChatCount = 0;
+          updateUnreadBadge();
+        }
+        const panel = document.getElementById('srTab' + capitalize(activeTab));
         if (panel) panel.classList.add('active');
       });
     });
 
-    // Study goal
-    document.getElementById('srSetGoal')?.addEventListener('click', () => {
-      const input = document.getElementById('srGoalInput');
-      studyGoal = input?.value.trim() || '';
-      broadcastData({ type: 'progress', goal: studyGoal, seconds: studySeconds });
-      updateProgressUI();
-      if (typeof showNotification === 'function') showNotification('Study goal updated!', 'success');
+    document.querySelectorAll('.sr-react-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const emoji = btn.dataset.emoji;
+        spawnFloatingReaction(emoji);
+        broadcastData({ type: 'reaction', emoji });
+      });
     });
 
-    // Whiteboard toggle
-    document.getElementById('srToggleWB')?.addEventListener('click', toggleWhiteboard);
+    const applyGoal = () => {
+      const input = document.getElementById('srGoalInput');
+      studyGoal = input?.value.trim() || '';
+      broadcastData({ type: 'progress', goal: studyGoal, seconds: timerSeconds });
+      updateProgressUI();
+      notify('Study goal updated.', 'success');
+    };
 
-    // Whiteboard listeners
+    document.getElementById('srSetGoal')?.addEventListener('click', applyGoal);
+    document.getElementById('srGoalInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') applyGoal(); });
+
+    setupPushToTalk();
     initWhiteboardListeners();
   }
 
-      /* ================================================================
-     CHAT & FILE SHARE
+  function updateUnreadBadge() {
+    const badge = document.getElementById('srUnreadBadge');
+    if (badge) {
+      badge.style.display = unreadChatCount > 0 ? 'inline-block' : 'none';
+      badge.textContent = unreadChatCount;
+    }
+  }
+
+  function toggleRaiseHand() {
+    handRaised = !handRaised;
+    const btn = document.getElementById('srRaiseHandBtn');
+    if (btn) btn.classList.toggle('sr-ctrl-active', handRaised);
+    broadcastData({ type: 'hand-raise', raised: handRaised });
+    updateParticipantsUI();
+    if (handRaised) {
+      SoundFX.playHandRaise();
+      notify('Hand raised.', 'info');
+    }
+  }
+
+  function spawnFloatingReaction(emoji) {
+    SoundFX.playPop();
+    const container = document.getElementById('srParticipantArea');
+    if (!container) return;
+
+    const el = document.createElement('div');
+    el.className = 'sr-floating-reaction';
+    el.textContent = emoji;
+    el.style.left = `${20 + Math.random() * 60}%`;
+    el.style.bottom = '80px';
+    container.appendChild(el);
+
+    setTimeout(() => el.remove(), 2000);
+  }
+
+  /* ================================================================
+     MEDIA ENGINE (AUDIO / CAMERA / SCREEN SHARE)
+     ================================================================ */
+  async function getOrCreateMediaStream() {
+    if (!localMediaStream) {
+      localMediaStream = new MediaStream();
+    }
+    return localMediaStream;
+  }
+
+  async function toggleMicrophone() {
+    try {
+      const stream = await getOrCreateMediaStream();
+      let audioTrack = stream.getAudioTracks()[0];
+
+      if (!audioTrack) {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+        audioTrack = audioStream.getAudioTracks()[0];
+        stream.addTrack(audioTrack);
+        micActive = true;
+        audioTrack.enabled = true;
+      } else {
+        micActive = !micActive;
+        audioTrack.enabled = micActive;
+      }
+
+      await syncTracksToAllPeers();
+      updateMediaButtons();
+      setupAudioAnalysis();
+      notify(micActive ? 'Microphone unmuted' : 'Microphone muted', 'info');
+    } catch (err) {
+      micActive = false;
+      updateMediaButtons();
+      notify('Could not access microphone.', 'error');
+    }
+  }
+
+  async function toggleCamera() {
+    try {
+      const stream = await getOrCreateMediaStream();
+      let videoTrack = stream.getVideoTracks()[0];
+
+      if (!videoTrack) {
+        const videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }
+        });
+        videoTrack = videoStream.getVideoTracks()[0];
+        stream.addTrack(videoTrack);
+        camActive = true;
+        videoTrack.enabled = true;
+      } else {
+        camActive = !camActive;
+        videoTrack.enabled = camActive;
+      }
+
+      await syncTracksToAllPeers();
+      updateMediaButtons();
+      renderLocalCam(camActive ? stream : null);
+      notify(camActive ? 'Camera turned on' : 'Camera turned off', 'info');
+    } catch (err) {
+      camActive = false;
+      updateMediaButtons();
+      notify('Could not access camera.', 'error');
+    }
+  }
+
+  function updateMediaButtons() {
+    const mbtn = document.getElementById('srToggleMic');
+    if (mbtn) {
+      mbtn.innerHTML = `<i class="fas fa-${micActive ? 'microphone' : 'microphone-slash'}" style="${micActive ? '' : 'color: #ef4444;'}"></i>`;
+      mbtn.classList.toggle('sr-ctrl-active', micActive);
+    }
+    const cbtn = document.getElementById('srToggleCamera');
+    if (cbtn) {
+      cbtn.innerHTML = `<i class="fas fa-${camActive ? 'video' : 'video-slash'}" style="${camActive ? '' : 'color: #ef4444;'}"></i>`;
+      cbtn.classList.toggle('sr-ctrl-active', camActive);
+    }
+  }
+
+  function setupAudioAnalysis() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!audioContext && AudioCtx) audioContext = new AudioCtx();
+      if (!audioContext) return;
+
+      if (!localAudioAnalyser && localMediaStream && localMediaStream.getAudioTracks().length > 0) {
+        localAudioSource = audioContext.createMediaStreamSource(localMediaStream);
+        localAudioAnalyser = audioContext.createAnalyser();
+        localAudioAnalyser.fftSize = 256;
+        localAudioSource.connect(localAudioAnalyser);
+
+        const dataArray = new Uint8Array(localAudioAnalyser.frequencyBinCount);
+        if (speechInterval) clearInterval(speechInterval);
+
+        speechInterval = setInterval(() => {
+          if (!micActive || !localAudioAnalyser) {
+            if (isSpeaking) {
+              isSpeaking = false;
+              document.getElementById('srTile_self')?.classList.remove('sr-speaking');
+              broadcastData({ type: 'speaking', speaking: false });
+            }
+            return;
+          }
+
+          localAudioAnalyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          const avg = sum / dataArray.length;
+          const nowSpeaking = avg > 20;
+
+          if (nowSpeaking !== isSpeaking) {
+            isSpeaking = nowSpeaking;
+            document.getElementById('srTile_self')?.classList.toggle('sr-speaking', isSpeaking);
+            broadcastData({ type: 'speaking', speaking: isSpeaking });
+          }
+        }, 200);
+      }
+    } catch (e) {}
+  }
+
+  async function toggleScreenShare() {
+    const btn = document.getElementById('srToggleScreenShare');
+    if (localScreenStream) {
+      stopScreenShare();
+      return;
+    }
+    try {
+      // Standard display media request compatible with Linux portal / Wayland / X11
+      localScreenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          cursor: 'always',
+          frameRate: { ideal: 30, max: 60 }
+        },
+        audio: false
+      });
+
+      const vTrack = localScreenStream.getVideoTracks()[0];
+      if (vTrack) {
+        vTrack.onended = () => stopScreenShare();
+      }
+
+      if (btn) btn.classList.add('sr-ctrl-active');
+
+      // Set local spotlight & broadcast to all peers
+      setSpotlight('self');
+      broadcastData({ type: 'screen-share-status', active: true, nickname });
+
+      await syncTracksToAllPeers();
+      notify('Screen sharing started.', 'success');
+    } catch (err) {
+      console.warn('[ScreenShare] Capture error or cancelled:', err);
+      notify('Screen share canceled or not permitted.', 'info');
+    }
+  }
+
+  function stopScreenShare() {
+    if (localScreenStream) {
+      localScreenStream.getTracks().forEach(t => t.stop());
+      localScreenStream = null;
+    }
+
+    const btn = document.getElementById('srToggleScreenShare');
+    if (btn) btn.classList.remove('sr-ctrl-active');
+
+    if (screenShareOwnerId === 'self') {
+      setSpotlight(null);
+    }
+
+    broadcastData({ type: 'screen-share-status', active: false });
+    syncTracksToAllPeers().catch(() => {});
+  }
+
+  function renderLocalCam(stream) {
+    const localTile = document.getElementById('srTile_self');
+    if (!localTile) return;
+    const off = localTile.querySelector('.sr-video-off');
+    let camVideo = localTile.querySelector('.sr-cam-video');
+
+    if (!stream) {
+      if (camVideo) { camVideo.pause(); camVideo.srcObject = null; camVideo.remove(); }
+      if (off) off.style.display = 'flex';
+      return;
+    }
+    if (off) off.style.display = 'none';
+    if (!camVideo) {
+      camVideo = document.createElement('video');
+      camVideo.className = 'sr-cam-video';
+      camVideo.autoplay = true;
+      camVideo.playsInline = true;
+      camVideo.muted = true;
+      camVideo.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;border-radius:12px;z-index:1;';
+      localTile.appendChild(camVideo);
+    }
+    camVideo.srcObject = stream;
+    camVideo.play().catch(() => {});
+  }
+
+  function renderRemoteMedia(userId, stream) {
+    const tile = document.getElementById(`srTile_${userId}`);
+    if (!tile) return;
+
+    const hasVideo = stream.getVideoTracks().length > 0;
+    const off = tile.querySelector('.sr-video-off');
+
+    // Audio Receiver
+    let audio = tile.querySelector('.sr-remote-audio');
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.className = 'sr-remote-audio';
+      audio.autoplay = true;
+      audio.style.display = 'none';
+      tile.appendChild(audio);
+    }
+    audio.srcObject = stream;
+    audio.play().catch(() => {});
+
+    // Video Receiver
+    let camVideo = tile.querySelector('.sr-cam-video');
+    if (hasVideo) {
+      if (off) off.style.display = 'none';
+      if (!camVideo) {
+        camVideo = document.createElement('video');
+        camVideo.className = 'sr-cam-video';
+        camVideo.autoplay = true;
+        camVideo.playsInline = true;
+        camVideo.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;border-radius:12px;z-index:1;';
+        tile.appendChild(camVideo);
+      }
+      camVideo.srcObject = stream;
+      camVideo.play().catch(() => {});
+
+      // If this user is currently spotlighted as the presenter, update spotlight video
+      if (screenShareOwnerId === userId) {
+        const spotVideo = document.getElementById('srSpotlightVideo');
+        if (spotVideo) {
+          spotVideo.srcObject = stream;
+          spotVideo.play().catch(() => {});
+        }
+      }
+    } else {
+      if (camVideo) { camVideo.pause(); camVideo.srcObject = null; camVideo.remove(); }
+      if (off) off.style.display = 'flex';
+    }
+  }
+
+  function clearRemoteMedia(userId) {
+    const pc = peerConnections.get(userId);
+    if (pc) {
+      try { pc.close(); } catch (e) {}
+      peerConnections.delete(userId);
+    }
+    remoteStreams.delete(userId);
+
+    const tile = document.getElementById(`srTile_${userId}`);
+    if (tile) {
+      tile.querySelectorAll('video, audio').forEach(el => {
+        el.pause();
+        el.srcObject = null;
+        el.remove();
+      });
+      const off = tile.querySelector('.sr-video-off');
+      if (off) off.style.display = 'flex';
+    }
+  }
+
+  function setupPushToTalk() {
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && !pttActive && !wbActive) {
+        const tag = document.activeElement?.tagName.toLowerCase();
+        if (tag === 'input' || tag === 'textarea') return;
+        if (localMediaStream && localMediaStream.getAudioTracks().length > 0 && !micActive) {
+          pttActive = true;
+          localMediaStream.getAudioTracks()[0].enabled = true;
+          const mbtn = document.getElementById('srToggleMic');
+          if (mbtn) mbtn.classList.add('sr-ctrl-active');
+        }
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space' && pttActive) {
+        pttActive = false;
+        if (localMediaStream && localMediaStream.getAudioTracks().length > 0 && !micActive) {
+          localMediaStream.getAudioTracks()[0].enabled = false;
+          const mbtn = document.getElementById('srToggleMic');
+          if (mbtn) mbtn.classList.remove('sr-ctrl-active');
+        }
+      }
+    });
+  }
+
+  /* ================================================================
+     CHAT & MATERIAL SHARING
      ================================================================ */
   function sendChatMessage() {
     const input = document.getElementById('srChatInput');
@@ -953,12 +1707,18 @@
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
-    const msg = { sender: nickname, text, time: Date.now(), type: 'chat' };
+
+    const msg = {
+      senderId: myId,
+      senderName: nickname,
+      text: text,
+      time: Date.now(),
+      type: 'chat'
+    };
+
     chatMessages.push(msg);
     broadcastData(msg);
     renderChatMessages();
-    const container = document.getElementById('srChatMessages');
-    if (container) container.scrollTop = container.scrollHeight;
   }
 
   function handleShareMaterial() {
@@ -966,553 +1726,61 @@
     if (!fileInput) return;
     fileInput.click();
     fileInput.onchange = async () => {
-        const file = fileInput.files[0];
-        if(!file) return;
-        
-        // Ensure file isn't too huge for websocket payload (cap at ~2MB for safety)
-        if (file.size > 2 * 1024 * 1024) {
-          if (typeof showNotification === 'function') 
-            showNotification('File exceeds 2MB limit for direct relay share.', 'error');
-          return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = e => {
-            const base64Data = e.target.result;
-            broadcastData({ type: 'study-material', fileName: file.name, fileData: base64Data });
-            receiveStudyMaterial(myId, base64Data, file.name); 
-        };
-        reader.readAsDataURL(file);
-        fileInput.value = ''; // reset
+      const file = fileInput.files[0];
+      if (!file) return;
+      if (file.size > 4 * 1024 * 1024) {
+        notify('File exceeds 4MB sharing limit.', 'error');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = e => {
+        const base64Data = e.target.result;
+        broadcastData({ type: 'study-material', fileName: file.name, fileData: base64Data });
+        receiveStudyMaterial(myId, base64Data, file.name);
+      };
+      reader.readAsDataURL(file);
+      fileInput.value = '';
     };
   }
 
   function receiveStudyMaterial(fromId, fileData, fileName) {
     const senderName = (fromId === myId) ? nickname : (peers[fromId]?.nickname || 'Someone');
     const msgHtml = `Shared a file: <br><a href="${fileData}" download="${escapeHTML(fileName)}" class="sr-file-download-link"><i class="fas fa-file-download"></i> ${escapeHTML(fileName)}</a>`;
-    chatMessages.push({ 
-      sender: senderName, 
-      text: msgHtml, 
-      time: Date.now(), 
-      type: 'html' 
-    });
+    chatMessages.push({ senderId: fromId, senderName: senderName, text: msgHtml, time: Date.now(), type: 'html' });
     renderChatMessages();
+    SoundFX.playPop();
   }
 
   function renderChatMessages() {
     const container = document.getElementById('srChatMessages');
     if (!container) return;
     if (chatMessages.length === 0) {
-      container.innerHTML = '<div class="sr-chat-empty"><i class="fas fa-comments"></i><p>No messages yet</p></div>';
+      container.innerHTML = '<div class="sr-chat-empty"><i class="fas fa-comments"></i><p>No messages yet.</p></div>';
       return;
     }
     container.innerHTML = chatMessages.map(m => {
-      const isMe = m.sender === nickname;
+      const isMe = m.senderId === myId;
       const timeStr = new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       if (m.type === 'system') {
         return `<div class="sr-chat-msg sr-chat-system"><em>${m.text}</em></div>`;
       }
-      if (m.type === 'html') {
-        return `<div class="sr-chat-msg ${isMe ? 'sr-chat-me' : 'sr-chat-other'}">
-          <span class="sr-chat-sender">${escapeHTML(m.sender)}</span>
-          <span class="sr-chat-text" style="word-break:break-all;">${m.text}</span>
+      return `
+        <div class="sr-chat-msg ${isMe ? 'sr-chat-me' : 'sr-chat-other'}">
+          <span class="sr-chat-sender">${escapeHTML(m.senderName)}</span>
+          <span class="sr-chat-text">${m.type === 'html' ? m.text : escapeHTML(m.text)}</span>
           <span class="sr-chat-time">${timeStr}</span>
         </div>`;
-      }
-      return `<div class="sr-chat-msg ${isMe ? 'sr-chat-me' : 'sr-chat-other'}">
-        <span class="sr-chat-sender">${escapeHTML(m.sender)}</span>
-        <span class="sr-chat-text">${escapeHTML(m.text)}</span>
-        <span class="sr-chat-time">${timeStr}</span>
-      </div>`;
     }).join('');
     container.scrollTop = container.scrollHeight;
   }
 
   function addSystemMessage(text) {
-    chatMessages.push({ sender: '', text, time: Date.now(), type: 'system' });
+    chatMessages.push({ senderId: '', senderName: '', text, time: Date.now(), type: 'system' });
     renderChatMessages();
   }
 
   /* ================================================================
-     WEBRTC SCREENSHARING
-     ================================================================ */
-  async function toggleScreenShare() {
-    const btn = document.getElementById('srToggleScreenShare');
-    
-    if (localScreenStream) {
-      stopScreenShare();
-      return;
-    }
-    try {
-      // Small delay allows slow Linux GC to close the backend PipeWire handle before opening a new one
-      // Removing the delay ensures WebKit keeps the user gesture token, preventing UI blocks
-      localScreenStream = await window.navigator.mediaDevices.getDisplayMedia({ video: { mediaSource: "screen" } });
-      
-      const vTrack = localScreenStream.getVideoTracks()[0];
-      if (vTrack) {
-          vTrack.onended = () => {
-              if (localScreenStream) stopScreenShare();
-          };
-      }
-      
-      Object.keys(peers).forEach(peerId => {
-         createRTCPeerConnection(peerId, true);
-      });
-      
-      if(btn) btn.classList.add('sr-ctrl-active');
-      renderLocalVideo(localScreenStream); 
-    } catch (err) {
-      console.error("Failed to share screen", err);
-      if (typeof showNotification === 'function') showNotification(`Screenshare failed: ${err.message}`, 'error');
-    }
-  }
-
-  function stopScreenShare() {
-    if (localScreenStream) {
-        if (ws && ws.calls) {
-            ws.calls.forEach(call => {
-                try { 
-                    if (call.peerConnection) {
-                        call.peerConnection.getSenders().forEach(sender => {
-                            if (sender.track) {
-                                try { call.peerConnection.removeTrack(sender); } catch(x) {}
-                            }
-                        });
-                        call.peerConnection.close();
-                    }
-                    call.close(); 
-                } catch(e) {}
-            });
-            ws.calls = [];
-        }
-
-        Object.values(peerConnections).forEach(pc => {
-            try {
-                pc.getSenders().forEach(sender => {
-                    try { pc.removeTrack(sender); } catch(x) {}
-                });
-                pc.close();
-            } catch(e) {}
-        });
-        peerConnections = {};
-
-        const localTile = document.querySelector('.sr-video-local');
-        if (localTile) {
-            const video = localTile.querySelector('.sr-screen-video');
-            if (video) {
-                video.pause();
-                video.srcObject = null;
-                video.removeAttribute('src');
-                video.load();
-                video.remove();
-            }
-            const off = localTile.querySelector('.sr-video-off');
-            if (!localTile.querySelector('.sr-cam-video') && off) {
-                 off.style.display = 'flex';
-                 off.innerHTML = '<i class="fas fa-user"></i>';
-            }
-        }
-
-        const streamToKill = localScreenStream;
-        localScreenStream = null;
-        
-        setTimeout(() => {
-            if (streamToKill) {
-                const tracks = streamToKill.getTracks();
-                tracks.forEach(t => {
-                    t.onended = null;
-                    try { 
-                        t.enabled = false;
-                        t.stop(); 
-                    } catch(e) {}
-                });
-            }
-        }, 50);
-    }
-
-    const btn = document.getElementById('srToggleScreenShare');
-    if(btn) btn.classList.remove('sr-ctrl-active');
-    
-    broadcastData({ type: 'webrtc-stop' });
-  }
-
-
-  function createRTCPeerConnection(targetId, isOffer) {
-    if (!ws || !ws.peer || !localScreenStream) return;
-    const destPeerJsId = (peers[targetId] && peers[targetId].peerJsId) ? peers[targetId].peerJsId : ('qroom-' + internetRoomId.toLowerCase());
-    
-    // Call them directly via PeerJS to avoid GStreamer Linux crashes with manual WebRTC SDPs
-    const call = ws.peer.call(destPeerJsId, localScreenStream);
-    ws.calls.push(call);
-    
-    // Fallback: If someone else calls us, we already bound ws.peer.on('call') in connectWebSocket.
-  }
-  function renderLocalVideo(stream) {
-    const localTile = document.querySelector('.sr-video-local');
-    if (!localTile) return;
-    const off = localTile.querySelector('.sr-video-off');
-    
-    let video = localTile.querySelector('.sr-screen-video');
-    
-    // If stopping stream
-    if (!stream) {
-       if (video) {
-           video.pause();
-           video.srcObject = null;
-           video.removeAttribute('src');
-           video.load();
-           video.remove();
-       }
-       if (!localTile.querySelector('.sr-cam-video') && off) {
-           off.innerHTML = '<i class="fas fa-user"></i>';
-           off.style.display = 'flex';
-       }
-       return;
-    }
-    
-    if (off) off.style.display = 'none';
-    if (!video) {
-        video = document.createElement('video');
-        video.className = 'sr-screen-video';
-        video.autoplay = true;
-        video.playsInline = true;
-        video.muted = true;
-        video.style.width = '100%';
-        video.style.height = '100%';
-        video.style.objectFit = 'contain';
-        video.style.position = 'absolute';
-        video.style.top = '0';
-        video.style.left = '0';
-        video.style.zIndex = '3';
-        localTile.insertBefore(video, localTile.firstChild);
-    }
-    video.srcObject = stream;
-    video.play().catch(e => console.warn('Screenshare preview play prevented:', e));
-    
-    // Attempt triggering a reflow if cam is also rendering
-    const cam = localTile.querySelector('.sr-cam-video');
-    if (cam) {
-       cam.style.position = 'absolute';
-       cam.style.width = '30%';
-       cam.style.height = 'auto';
-       cam.style.bottom = '10px';
-       cam.style.right = '10px';
-       cam.style.zIndex = '5';
-       cam.style.border = '2px solid rgba(255,255,255,0.5)';
-       cam.style.borderRadius = '8px';
-    }
-  }
-
-  function renderRemoteVideo(peerId, stream) {
-    const grid = document.getElementById('srParticipantsGrid');
-    if (!grid) return;
-    // Find peer tile
-    const tiles = grid.querySelectorAll('.sr-video-tile:not(.sr-video-local)');
-    let targetTile = null;
-    tiles.forEach(t => {
-       const lbl = t.querySelector('.sr-video-label');
-       if (lbl && lbl.textContent.includes(peers[peerId]?.nickname)) {
-           targetTile = t;
-       }
-    });
-    
-    if (targetTile) {
-        const off = targetTile.querySelector('.sr-video-off');
-        
-        if (!stream) {
-             const sv = targetTile.querySelector('.sr-screen-video');
-             if (sv) {
-                 sv.pause();
-                 sv.srcObject = null;
-                 sv.removeAttribute('src');
-                 sv.load();
-                 sv.remove();
-             }
-             if (!targetTile.querySelector('.sr-cam-video') && off) {
-                 off.innerHTML = '<i class="fas fa-user"></i>';
-                 off.style.display = 'flex';
-             }
-             return;
-        }
-
-        if (off) off.style.display = 'none';
-        let video = targetTile.querySelector('.sr-screen-video');
-        if (!video) {
-            video = document.createElement('video');
-            video.className = 'sr-screen-video';
-            video.autoplay = true;
-            video.playsInline = true;
-            video.style.position = 'absolute';
-            video.style.top = '0';
-            video.style.left = '0';
-            video.style.zIndex = '3';
-            video.style.width = '100%';
-            video.style.height = '100%';
-            video.style.objectFit = 'contain';
-            
-            const savedAudioOut = localStorage.getItem('questionary-audio-out-id');
-            if (savedAudioOut && typeof video.setSinkId === 'function') {
-                video.setSinkId(savedAudioOut).catch(console.error);
-            }
-
-            targetTile.insertBefore(video, targetTile.firstChild);
-        }
-        video.srcObject = stream;
-        video.play().catch(e => console.warn('Screenshare stream play prevented:', e));
-        
-        // Check for cam overlap
-        const cam = targetTile.querySelector('.sr-cam-video');
-        if (cam) {
-           cam.style.position = 'absolute';
-           cam.style.width = '30%';
-           cam.style.height = 'auto';
-           cam.style.bottom = '10px';
-           cam.style.right = '10px';
-           cam.style.zIndex = '5';
-           cam.style.border = '2px solid rgba(255,255,255,0.5)';
-           cam.style.borderRadius = '8px';
-        }
-    }
-  }
-
-  /* ================================================================
-     UI UPDATES
-     ================================================================ */
-  function updateParticipantsUI() {
-    const list = document.getElementById('srParticipantsList');
-    if (list) list.innerHTML = buildParticipantsHTML();
-    const grid = document.getElementById('srParticipantsGrid');
-    if (grid) grid.innerHTML = buildParticipantCardsHTML();
-    updatePeopleCount();
-    updateVideoGridLayout();
-  }
-
-  function updateProgressUI() {
-    const list = document.getElementById('srProgressList');
-    if (list) list.innerHTML = buildProgressHTML();
-  }
-
-  function updatePeopleCount() {
-    const badge = document.getElementById('srPeopleCount');
-    if (badge) badge.textContent = 1 + Object.keys(peers).length;
-  }
-
-  function updateVideoGridLayout() {
-    const grid = document.getElementById('srParticipantsGrid');
-    if (!grid) return;
-    const count = grid.children.length;
-    grid.classList.remove('sr-grid-1', 'sr-grid-2', 'sr-grid-3', 'sr-grid-4plus');
-    if (count <= 1) grid.classList.add('sr-grid-1');
-    else if (count === 2) grid.classList.add('sr-grid-2');
-    else if (count <= 4) grid.classList.add('sr-grid-3');
-    else grid.classList.add('sr-grid-4plus');
-  }
-
-  /* ================================================================
-     SESSION FLOW — CREATE / JOIN / LEAVE
-     ================================================================ */
-  async function handleCreate() {
-    nickname = document.getElementById('srNickname')?.value.trim() || 'Student';
-    localStorage.setItem('questionary-study-nickname', nickname);
-    roomPassword = document.getElementById('srCreatePassword')?.value || '';
-    isHost = true;
-
-    internetMode = true;
-
-    /* ── Internet mode only: connect to a public relay server ── */
-    relayUrl = DEFAULT_RELAY_URL;
-    internetRoomId = generateRoomId();
-
-    try {
-      showLoading('Connecting to relay server…');
-      if (relayUrl.includes('localhost') || relayUrl.includes('127.0.0.1')) {
-         try { await tauriInvoke('start_study_server', { password: roomPassword || '' }); } catch(e) { console.warn('Could not start local relay', e); }
-         await new Promise(r => setTimeout(r, 1000));
-      }
-      await connectWebSocket(relayUrl);
-      sendToServer({ action: 'host', nickname, password: roomPassword, room: internetRoomId });
-      roomAddress = internetRoomId;
-    } catch (err) {
-      hideLoading();
-      cleanup();
-      renderStudyRoom();
-      if (typeof showNotification === 'function')
-        showNotification('Failed to connect to relay: ' + err.message, 'error');
-    }
-  }
-
-  async function handleJoin() {
-    nickname = document.getElementById('srNickname')?.value.trim() || 'Student';
-    localStorage.setItem('questionary-study-nickname', nickname);
-    const rawInput = document.getElementById('srJoinAddress')?.value.trim();
-    if (!rawInput) {
-      if (typeof showNotification === 'function')
-        showNotification('Please enter a room code.', 'error');
-      return;
-    }
-    roomPassword = document.getElementById('srJoinPassword')?.value || '';
-    isHost = false;
-
-    const parsedCode = normalizeRoomCode(rawInput);
-    if (!parsedCode) {
-      if (typeof showNotification === 'function')
-        showNotification('Enter a valid 10-character alphanumeric room code.', 'error');
-      return;
-    }
-
-    internetMode = true;
-    internetRoomId = parsedCode;
-    relayUrl = DEFAULT_RELAY_URL;
-    roomAddress = parsedCode;
-
-    try {
-      showLoading('Connecting to relay…');
-      await connectWebSocket(relayUrl);
-      sendToServer({ action: 'join', nickname, password: roomPassword, room: internetRoomId });
-    } catch (err) {
-      hideLoading();
-      cleanup();
-      renderStudyRoom();
-      if (typeof showNotification === 'function')
-        showNotification('Failed to join via relay: ' + err.message, 'error');
-    }
-  }
-
-  async function leaveRoom() {
-    if (typeof window.showConfirm === 'function') {
-      const ok = await window.showConfirm('Leave Study Room', 'Are you sure you want to leave the study session?');
-      if (!ok) return;
-    }
-    doLeave();
-    renderStudyRoom();
-    if (typeof showNotification === 'function')
-      showNotification('You have left the study room.', 'info');
-  }
-
-  function forceLeaveRoom() {
-    doLeave();
-    renderStudyRoom();
-    if (typeof showNotification === 'function')
-      showNotification('The study room has been closed.', 'info');
-  }
-
-  function doLeave() {
-    stopStudyTimer();
-    saveSessionStats();
-
-    // Close WebSocket
-    if (ws) {
-      try { ws.onclose = null; ws.close(); } catch (_) {}
-      ws = null;
-    }
-
-    // If we were the host (LAN mode), stop the local relay server
-    if (isHost && !internetMode) {
-      tauriInvoke('stop_study_server', {}).catch(() => {});
-    }
-
-    // Reset all state
-    sessionActive = false;
-    isHost = false;
-    myId = '';
-    peers = {};
-    roomAddress = '';
-    roomPassword = '';
-    serverPort = 0;
-    internetMode = false;
-    relayUrl = '';
-    internetRoomId = '';
-    chatMessages = [];
-    studyGoal = '';
-    studySeconds = 0;
-    wbActive = false;
-    wbCanvas = null;
-    wbCtx = null;
-    wbOverlay = null;
-    wbOCtx = null;
-    wbStrokes = [];
-    wbRedoStrokes = [];
-    wbQuestions = [];
-    wbNextQId = 1;
-    wbCanvasW = 4096;
-    wbCanvasH = 4096;
-    wbZoom = 1;
-    wbPanX = 0;
-    wbPanY = 0;
-    wbSpaceDown = false;
-    wbFullscreen = false;
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  }
-
-  /** Cleanup on error (no notification / re-render) */
-  function cleanup() {
-    if (ws) { try { ws.onclose = null; ws.close(); } catch (_) {} ws = null; }
-    if (isHost && !internetMode) { tauriInvoke('stop_study_server', {}).catch(() => {}); }
-    sessionActive = false;
-    isHost = false;
-    myId = '';
-    peers = {};
-    roomAddress = '';
-    roomPassword = '';
-    serverPort = 0;
-    internetMode = false;
-    relayUrl = '';
-    internetRoomId = '';
-  }
-
-  /* ---------- study timer ---------- */
-  function startStudyTimer() {
-    studySeconds = 0;
-    studyTimer = setInterval(() => {
-      studySeconds++;
-      const el = document.getElementById('srSessionTimer');
-      if (el) el.textContent = fmtTime(studySeconds);
-      if (studySeconds % (PROGRESS_SYNC_INTERVAL / 1000) === 0) {
-        broadcastData({ type: 'progress', goal: studyGoal, seconds: studySeconds });
-        updateProgressUI();
-      }
-    }, 1000);
-  }
-
-  function stopStudyTimer() {
-    if (studyTimer) { clearInterval(studyTimer); studyTimer = null; }
-  }
-
-  /* ---------- session stats ---------- */
-  function saveSessionStats() {
-    if (studySeconds < 30) return;
-    const sessions = JSON.parse(localStorage.getItem('questionary-study-sessions') || '[]');
-    sessions.push({
-      date: new Date().toISOString(),
-      duration: studySeconds,
-      goal: studyGoal,
-      participants: 1 + Object.keys(peers).length,
-      roomAddress
-    });
-    if (sessions.length > 100) sessions.splice(0, sessions.length - 100);
-    localStorage.setItem('questionary-study-sessions', JSON.stringify(sessions));
-  }
-
-  /* ---------- loading overlay ---------- */
-  function showLoading(msg) {
-    let overlay = document.getElementById('srLoadingOverlay');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = 'srLoadingOverlay';
-      overlay.className = 'sr-loading-overlay';
-      document.body.appendChild(overlay);
-    }
-    overlay.innerHTML = `<div class="sr-loading-box"><div class="sr-spinner"></div><p>${msg || 'Loading…'}</p></div>`;
-    overlay.style.display = 'flex';
-  }
-
-  function hideLoading() {
-    const overlay = document.getElementById('srLoadingOverlay');
-    if (overlay) overlay.style.display = 'none';
-  }
-
-  /* ================================================================
-     WHITEBOARD — infinite canvas with pan, zoom, drawing tools
+     WHITEBOARD
      ================================================================ */
   function toggleWhiteboard() {
     wbActive = !wbActive;
@@ -1540,16 +1808,29 @@
     wbOverlay.width = wbCanvasW;
     wbOverlay.height = wbCanvasH;
 
-    wbCtx.fillStyle = '#1e1e2e';
-    wbCtx.fillRect(0, 0, wbCanvasW, wbCanvasH);
+    renderCanvasGrid();
 
     wbZoom = 1;
     wbPanX = (wbCanvasW - getWrapSize().w) / 2;
     wbPanY = (wbCanvasH - getWrapSize().h) / 2;
-    wbStrokes = [];
-    wbRedoStrokes = [];
     applyTransform();
     updateZoomLabel();
+    replayAllStrokes();
+  }
+
+  function renderCanvasGrid() {
+    if (!wbCtx) return;
+    wbCtx.fillStyle = '#181824';
+    wbCtx.fillRect(0, 0, wbCanvasW, wbCanvasH);
+
+    if (wbGridStyle === 'dots') {
+      wbCtx.fillStyle = '#2e2e42';
+      for (let x = 20; x < wbCanvasW; x += 40) {
+        for (let y = 20; y < wbCanvasH; y += 40) {
+          wbCtx.fillRect(x, y, 2, 2);
+        }
+      }
+    }
   }
 
   function getWrapSize() {
@@ -1582,115 +1863,58 @@
     return { x: sx / wbZoom + wbPanX, y: sy / wbZoom + wbPanY };
   }
 
-  function zoomAtPoint(newZoom, screenX, screenY) {
-    const wrap = document.getElementById('srWbCanvasWrap');
-    if (!wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    const sx = screenX - rect.left;
-    const sy = screenY - rect.top;
-    const vxBefore = sx / wbZoom + wbPanX;
-    const vyBefore = sy / wbZoom + wbPanY;
-    wbZoom = Math.max(0.02, Math.min(5, newZoom));
-    wbPanX = vxBefore - sx / wbZoom;
-    wbPanY = vyBefore - sy / wbZoom;
-    ensureCanvasCoversView();
-    applyTransform();
-    updateZoomLabel();
-  }
-
-  function zoomByDelta(delta, screenX, screenY) {
-    const factor = delta > 0 ? 0.9 : 1.1;
-    zoomAtPoint(wbZoom * factor, screenX, screenY);
-  }
-
-  function getActiveSize() {
-    if (wbTool === 'eraser') return wbEraserSize;
-    if (wbTool === 'highlighter') return wbHighlighterSize;
-    return wbPenSize;
-  }
-
   function selectWbTool(tool) {
     wbTool = tool;
     document.querySelectorAll('.sr-wb-tool-btn[data-tool]').forEach(b => {
       b.classList.toggle('active', b.dataset.tool === tool);
     });
-    const penG = document.getElementById('srWbPenSizeGroup');
-    const erG = document.getElementById('srWbEraserSizeGroup');
-    const hlG = document.getElementById('srWbHlSizeGroup');
-    if (penG) penG.style.display = (tool === 'pen') ? 'flex' : 'none';
-    if (erG) erG.style.display = (tool === 'eraser' || tool === 'block-erase') ? 'flex' : 'none';
-    if (hlG) hlG.style.display = (tool === 'highlighter') ? 'flex' : 'none';
-    const wrap = document.getElementById('srWbCanvasWrap');
-    if (wrap) {
-      if (wbSpaceDown || tool === 'pan') wrap.style.cursor = 'grab';
-      else if (tool === 'block-erase') wrap.style.cursor = 'crosshair';
-      else if (tool === 'eraser') wrap.style.cursor = 'cell';
-      else wrap.style.cursor = 'crosshair';
-    }
-  }
-
-  /* --- canvas drawing (pointer events) --- */
-  let _strokePoints = [];
-  let _rafPending = false;
-  let _pendingMoveEvent = null;
-  let _strokeBBox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-
-  function _updateBBox(x, y, size) {
-    const half = (size || 30) / 2 + 2;
-    if (x - half < _strokeBBox.minX) _strokeBBox.minX = x - half;
-    if (y - half < _strokeBBox.minY) _strokeBBox.minY = y - half;
-    if (x + half > _strokeBBox.maxX) _strokeBBox.maxX = x + half;
-    if (y + half > _strokeBBox.maxY) _strokeBBox.maxY = y + half;
-  }
-
-  function _resetBBox() {
-    _strokeBBox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
   }
 
   function initWhiteboardListeners() {
     const wrap = document.getElementById('srWbCanvasWrap');
     if (!wrap) return;
 
-    // Tool buttons
     document.querySelectorAll('.sr-wb-tool-btn[data-tool]').forEach(btn => {
       btn.addEventListener('click', () => selectWbTool(btn.dataset.tool));
     });
+
     document.getElementById('srWbColor')?.addEventListener('input', e => { wbColor = e.target.value; });
     document.getElementById('srWbPenSize')?.addEventListener('input', e => {
       wbPenSize = parseInt(e.target.value) || 3;
       const v = document.getElementById('srWbPenSizeVal');
       if (v) v.textContent = wbPenSize;
     });
-    document.getElementById('srWbEraserSize')?.addEventListener('input', e => {
-      wbEraserSize = parseInt(e.target.value) || 20;
-      const v = document.getElementById('srWbEraserSizeVal');
-      if (v) v.textContent = wbEraserSize;
+
+    document.getElementById('srWbGridToggle')?.addEventListener('click', () => {
+      wbGridStyle = wbGridStyle === 'dots' ? 'none' : 'dots';
+      renderCanvasGrid();
+      replayAllStrokes();
     });
-    document.getElementById('srWbHlSize')?.addEventListener('input', e => {
-      wbHighlighterSize = parseInt(e.target.value) || 18;
-      const v = document.getElementById('srWbHlSizeVal');
-      if (v) v.textContent = wbHighlighterSize;
+
+    document.getElementById('srWbUndo')?.addEventListener('click', () => {
+      undoCanvasLocal();
+      broadcastData({ type: 'wb-undo' });
     });
-    document.getElementById('srWbUndo')?.addEventListener('click', undoCanvas);
-    document.getElementById('srWbRedo')?.addEventListener('click', redoCanvas);
+
+    document.getElementById('srWbRedo')?.addEventListener('click', () => {
+      redoCanvasLocal();
+      broadcastData({ type: 'wb-redo' });
+    });
+
     document.getElementById('srWbClear')?.addEventListener('click', () => {
       clearCanvasLocal();
       broadcastData({ type: 'wb-clear' });
     });
+
     document.getElementById('srWbAddQ')?.addEventListener('click', addQuestion);
 
-    // Zoom controls
     document.getElementById('srWbZoomIn')?.addEventListener('click', () => {
-      const wrap2 = document.getElementById('srWbCanvasWrap');
-      if (!wrap2) return;
-      const r = wrap2.getBoundingClientRect();
-      zoomAtPoint(wbZoom * 1.2, r.left + r.width / 2, r.top + r.height / 2);
+      const r = wrap.getBoundingClientRect();
+      zoomAtPoint(wbZoom * 1.25, r.left + r.width / 2, r.top + r.height / 2);
     });
     document.getElementById('srWbZoomOut')?.addEventListener('click', () => {
-      const wrap2 = document.getElementById('srWbCanvasWrap');
-      if (!wrap2) return;
-      const r = wrap2.getBoundingClientRect();
-      zoomAtPoint(wbZoom / 1.2, r.left + r.width / 2, r.top + r.height / 2);
+      const r = wrap.getBoundingClientRect();
+      zoomAtPoint(wbZoom / 1.25, r.left + r.width / 2, r.top + r.height / 2);
     });
     document.getElementById('srWbZoomReset')?.addEventListener('click', () => {
       wbZoom = 1;
@@ -1700,834 +1924,696 @@
       updateZoomLabel();
     });
 
-    // Fullscreen
-    document.getElementById('srWbFullscreen')?.addEventListener('click', toggleWbFullscreen);
+    document.getElementById('srWbFullscreen')?.addEventListener('click', () => {
+      const panel = document.getElementById('srWhiteboardPanel');
+      if (!document.fullscreenElement) panel?.requestFullscreen().catch(() => {});
+      else document.exitFullscreen().catch(() => {});
+    });
 
-    // Download
     document.getElementById('srWbDownload')?.addEventListener('click', downloadWhiteboard);
-
-    // Save to library
     document.getElementById('srWbSaveLib')?.addEventListener('click', saveWhiteboardToLibrary);
 
-    // Mouse wheel → zoom
     wrap.addEventListener('wheel', e => {
       e.preventDefault();
-      zoomByDelta(e.deltaY, e.clientX, e.clientY);
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      zoomAtPoint(wbZoom * factor, e.clientX, e.clientY);
     }, { passive: false });
 
-    // Pointer events (setPointerCapture in onPointerDown ensures we get pointerup even outside)
     wrap.addEventListener('pointerdown', onPointerDown);
     wrap.addEventListener('pointermove', onPointerMove);
     wrap.addEventListener('pointerup', onPointerUp);
+  }
 
-    // Middle-click pan
-    wrap.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
-
-    // Spacebar for pan mode
-    document.addEventListener('keydown', e => {
-      if (e.code === 'Space' && wbActive && !wbSpaceDown) {
-        const tag = document.activeElement?.tagName.toLowerCase();
-        if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-        e.preventDefault();
-        wbSpaceDown = true;
-        const w = document.getElementById('srWbCanvasWrap');
-        if (w) w.style.cursor = wbPanning ? 'grabbing' : 'grab';
-      }
-    });
-    document.addEventListener('keyup', e => {
-      if (e.code === 'Space' && wbSpaceDown) {
-        wbSpaceDown = false;
-        selectWbTool(wbTool);
-      }
-    });
-
-    // Listen for fullscreen change
-    document.addEventListener('fullscreenchange', () => {
-      wbFullscreen = !!document.fullscreenElement;
-      const btn = document.getElementById('srWbFullscreen');
-      if (btn) btn.innerHTML = `<i class="fas fa-${wbFullscreen ? 'compress' : 'expand'}"></i>`;
-    });
+  function zoomAtPoint(newZoom, screenX, screenY) {
+    const wrap = document.getElementById('srWbCanvasWrap');
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const sx = screenX - rect.left;
+    const sy = screenY - rect.top;
+    const vxBefore = sx / wbZoom + wbPanX;
+    const vyBefore = sy / wbZoom + wbPanY;
+    wbZoom = Math.max(0.1, Math.min(4, newZoom));
+    wbPanX = vxBefore - sx / wbZoom;
+    wbPanY = vyBefore - sy / wbZoom;
+    applyTransform();
+    updateZoomLabel();
   }
 
   function onPointerDown(e) {
     if (!wbCtx) setupCanvas();
     const { x, y } = canvasXY(e);
 
-    // Capture pointer so we get pointerup even if cursor leaves the element
-    const wrap = document.getElementById('srWbCanvasWrap');
-    if (wrap) { try { wrap.setPointerCapture(e.pointerId); } catch (_) {} }
-
-    if (e.button === 1 || (wbSpaceDown && e.button === 0) || (wbTool === 'pan' && e.button === 0)) {
+    if (e.button === 1 || wbTool === 'pan' || e.spaceKey) {
       wbPanning = true;
       wbPanStart = { mx: e.clientX, my: e.clientY, px: wbPanX, py: wbPanY };
-      if (wrap) wrap.style.cursor = 'grabbing';
-      e.preventDefault();
       return;
     }
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
 
-    if (e.button !== 0) return;
     wbDrawing = true;
     wbRedoStrokes = [];
 
-    if (wbTool === 'block-erase') {
-      wbBlockStart = { x, y };
-      wbBlockRect = null;
-      _resetBBox();
+    if (['line', 'arrow', 'rect', 'circle'].includes(wbTool)) {
+      wbShapeStart = { x, y };
       return;
     }
 
-    _strokePoints = [{ x, y }];
-    _resetBBox();
-    _updateBBox(x, y, getActiveSize());
-
-    if (wbTool === 'highlighter') {
-      wbOCtx.clearRect(0, 0, wbCanvasW, wbCanvasH);
-      wbOCtx.beginPath();
-      wbOCtx.moveTo(x, y);
-    } else {
-      wbCtx.beginPath();
-      wbCtx.moveTo(x, y);
+    if (wbTool === 'text') {
+      const text = prompt('Enter text for canvas:');
+      if (text) {
+        drawTextOnCanvas(text, x, y, wbColor, wbPenSize * 4 + 12);
+        wbStrokes.push({ type: 'text', text, x, y, color: wbColor, size: wbPenSize * 4 + 12 });
+        broadcastData({ type: 'wb-text', text, x, y, color: wbColor, size: wbPenSize * 4 + 12 });
+      }
+      wbDrawing = false;
+      return;
     }
+
+    _liveStrokePoints = [{ x, y }];
+    wbCtx.beginPath();
+    wbCtx.moveTo(x, y);
   }
 
   function onPointerMove(e) {
+    const { x, y } = canvasXY(e);
+
+    if (Date.now() - _lastLiveBroadcast > 50) {
+      broadcastData({ type: 'wb-cursor', x, y, color: wbColor });
+      _lastLiveBroadcast = Date.now();
+    }
+
     if (wbPanning && wbPanStart) {
-      const dx = (e.clientX - wbPanStart.mx) / wbZoom;
-      const dy = (e.clientY - wbPanStart.my) / wbZoom;
-      wbPanX = wbPanStart.px - dx;
-      wbPanY = wbPanStart.py - dy;
-      ensureCanvasCoversView();
+      wbPanX = wbPanStart.px - (e.clientX - wbPanStart.mx) / wbZoom;
+      wbPanY = wbPanStart.py - (e.clientY - wbPanStart.my) / wbZoom;
       applyTransform();
       return;
     }
 
     if (!wbDrawing || !wbCtx) return;
 
-    // rAF throttle: batch move draws to next animation frame
-    _pendingMoveEvent = e;
-    if (!_rafPending) {
-      _rafPending = true;
-      requestAnimationFrame(_processMove);
-    }
-  }
-
-  function _processMove() {
-    _rafPending = false;
-    const e = _pendingMoveEvent;
-    if (!e || !wbDrawing || !wbCtx) return;
-    const { x, y } = canvasXY(e);
-
-    if (wbTool === 'block-erase' && wbBlockStart) {
-      const rx = Math.min(wbBlockStart.x, x);
-      const ry = Math.min(wbBlockStart.y, y);
-      const rw = Math.abs(x - wbBlockStart.x);
-      const rh = Math.abs(y - wbBlockStart.y);
-      wbBlockRect = { x: rx, y: ry, w: rw, h: rh };
-      // Only clear the area we previously drew + new area
-      const clearX = Math.max(0, Math.floor(_strokeBBox.minX) - 4);
-      const clearY = Math.max(0, Math.floor(_strokeBBox.minY) - 4);
-      const clearW = Math.min(wbCanvasW, Math.ceil(_strokeBBox.maxX - _strokeBBox.minX) + 8);
-      const clearH = Math.min(wbCanvasH, Math.ceil(_strokeBBox.maxY - _strokeBBox.minY) + 8);
-      if (isFinite(clearX) && isFinite(clearY)) {
-        wbOCtx.clearRect(clearX, clearY, clearW, clearH);
-      } else {
-        wbOCtx.clearRect(0, 0, wbCanvasW, wbCanvasH);
-      }
-      wbOCtx.save();
-      wbOCtx.strokeStyle = '#ef4444';
-      wbOCtx.lineWidth = 2 / wbZoom;
-      wbOCtx.setLineDash([6 / wbZoom, 4 / wbZoom]);
-      wbOCtx.strokeRect(rx, ry, rw, rh);
-      wbOCtx.restore();
-      _resetBBox();
-      _updateBBox(rx, ry, 4 / wbZoom);
-      _updateBBox(rx + rw, ry + rh, 4 / wbZoom);
-      return;
-    }
-
-    // Downsample: skip points too close together
-    if (_strokePoints.length > 0) {
-      const last = _strokePoints[_strokePoints.length - 1];
-      const dist = Math.abs(x - last.x) + Math.abs(y - last.y);
-      if (dist < 1.5) return;
-    }
-
-    _strokePoints.push({ x, y });
-
-    if (wbTool === 'highlighter') {
-      // Clear only the previous stroke bounding box, not the entire canvas
-      const clearX = Math.max(0, Math.floor(_strokeBBox.minX) - 2);
-      const clearY = Math.max(0, Math.floor(_strokeBBox.minY) - 2);
-      const clearW = Math.min(wbCanvasW, Math.ceil(_strokeBBox.maxX - _strokeBBox.minX) + 4);
-      const clearH = Math.min(wbCanvasH, Math.ceil(_strokeBBox.maxY - _strokeBBox.minY) + 4);
-      if (isFinite(clearX) && isFinite(clearY)) {
-        wbOCtx.clearRect(clearX, clearY, clearW, clearH);
-      } else {
-        wbOCtx.clearRect(0, 0, wbCanvasW, wbCanvasH);
-      }
-      _resetBBox();
-      wbOCtx.save();
-      wbOCtx.globalAlpha = 0.3;
-      wbOCtx.strokeStyle = wbColor;
-      wbOCtx.lineWidth = wbHighlighterSize;
-      wbOCtx.lineCap = 'round';
-      wbOCtx.lineJoin = 'round';
-      wbOCtx.beginPath();
-      wbOCtx.moveTo(_strokePoints[0].x, _strokePoints[0].y);
-      for (let i = 1; i < _strokePoints.length; i++) {
-        wbOCtx.lineTo(_strokePoints[i].x, _strokePoints[i].y);
-        _updateBBox(_strokePoints[i].x, _strokePoints[i].y, wbHighlighterSize);
-      }
-      _updateBBox(_strokePoints[0].x, _strokePoints[0].y, wbHighlighterSize);
-      wbOCtx.stroke();
-      wbOCtx.restore();
-    } else if (wbTool === 'eraser') {
-      wbCtx.globalAlpha = 1;
-      wbCtx.globalCompositeOperation = 'source-over';
-      wbCtx.strokeStyle = '#1e1e2e';
-      wbCtx.lineWidth = wbEraserSize;
-      wbCtx.lineCap = 'round';
-      wbCtx.lineJoin = 'round';
-      wbCtx.lineTo(x, y);
-      wbCtx.stroke();
-      wbCtx.beginPath();
-      wbCtx.moveTo(x, y);
-    } else {
-      wbCtx.globalAlpha = 1;
-      wbCtx.globalCompositeOperation = 'source-over';
-      wbCtx.strokeStyle = wbColor;
-      wbCtx.lineWidth = wbPenSize;
-      wbCtx.lineCap = 'round';
-      wbCtx.lineJoin = 'round';
-      wbCtx.lineTo(x, y);
-      wbCtx.stroke();
-      wbCtx.beginPath();
-      wbCtx.moveTo(x, y);
-    }
-  }
-
-  function onPointerUp(e) {
-    // Release pointer capture
-    const wrap = document.getElementById('srWbCanvasWrap');
-    if (wrap) { try { wrap.releasePointerCapture(e.pointerId); } catch (_) {} }
-
-    // Cancel any pending rAF draw so strokes don't continue after release
-    _rafPending = false;
-    _pendingMoveEvent = null;
-
-    if (wbPanning) {
-      wbPanning = false;
-      wbPanStart = null;
-      if (wrap) wrap.style.cursor = (wbSpaceDown || wbTool === 'pan') ? 'grab' : '';
-      selectWbTool(wbTool);
-      return;
-    }
-
-    if (!wbDrawing) return;
-    wbDrawing = false;
-
-    if (wbTool === 'block-erase' && wbBlockRect) {
+    if (wbShapeStart) {
       wbOCtx.clearRect(0, 0, wbCanvasW, wbCanvasH);
-      wbCtx.fillStyle = '#1e1e2e';
-      wbCtx.fillRect(wbBlockRect.x, wbBlockRect.y, wbBlockRect.w, wbBlockRect.h);
-      wbStrokes.push({ type: 'block-erase', rect: { ...wbBlockRect } });
-      broadcastData({ type: 'wb-block-erase', rect: wbBlockRect });
-      wbBlockStart = null;
-      wbBlockRect = null;
-      _resetBBox();
+      drawShapeOnContext(wbOCtx, wbTool, wbShapeStart, { x, y }, wbColor, wbPenSize);
       return;
     }
 
-    if (wbTool === 'highlighter' && _strokePoints.length > 1) {
-      wbCtx.save();
-      wbCtx.globalAlpha = 0.3;
-      wbCtx.strokeStyle = wbColor;
-      wbCtx.lineWidth = wbHighlighterSize;
-      wbCtx.lineCap = 'round';
-      wbCtx.lineJoin = 'round';
-      wbCtx.beginPath();
-      wbCtx.moveTo(_strokePoints[0].x, _strokePoints[0].y);
-      for (let i = 1; i < _strokePoints.length; i++) {
-        wbCtx.lineTo(_strokePoints[i].x, _strokePoints[i].y);
-      }
-      wbCtx.stroke();
-      wbCtx.restore();
-      wbOCtx.clearRect(0, 0, wbCanvasW, wbCanvasH);
-    }
+    _liveStrokePoints.push({ x, y });
 
-    wbCtx.beginPath();
-    wbCtx.globalAlpha = 1;
-    wbCtx.globalCompositeOperation = 'source-over';
-    _resetBBox();
-
-    // Record stroke command for undo
-    if (_strokePoints.length > 1) {
-      const cmd = {
-        type: 'stroke',
-        points: _strokePoints.slice(),
-        color: wbTool === 'eraser' ? '#1e1e2e' : wbColor,
-        size: getActiveSize(),
-        tool: wbTool,
-        alpha: wbTool === 'highlighter' ? 0.3 : 1
-      };
-      wbStrokes.push(cmd);
-      maybeGrowCanvas(_strokePoints);
-    }
-
-    // Downsample stroke points for network broadcast (skip every other point if > 80)
-    let broadcastPoints = _strokePoints;
-    if (broadcastPoints.length > 80) {
-      const sampled = [broadcastPoints[0]];
-      const step = Math.ceil(broadcastPoints.length / 60);
-      for (let i = step; i < broadcastPoints.length - 1; i += step) {
-        sampled.push(broadcastPoints[i]);
-      }
-      sampled.push(broadcastPoints[broadcastPoints.length - 1]);
-      broadcastPoints = sampled;
-    }
-
-    if (broadcastPoints.length > 1) {
+    if (_liveStrokePoints.length % 3 === 0) {
       broadcastData({
-        type: 'wb-stroke',
-        points: broadcastPoints,
-        color: wbTool === 'eraser' ? '#1e1e2e' : wbColor,
-        size: getActiveSize(),
+        type: 'wb-live-draw',
+        points: _liveStrokePoints.slice(-4),
+        color: wbTool === 'eraser' ? '#181824' : wbColor,
+        size: wbTool === 'eraser' ? wbEraserSize : wbPenSize,
         tool: wbTool,
         alpha: wbTool === 'highlighter' ? 0.3 : 1
       });
     }
-    _strokePoints = [];
-  }
 
-  function replayStroke(points, color, size, tool, alpha) {
-    if (!wbCtx || !points || points.length < 2) return;
     wbCtx.save();
-    wbCtx.beginPath();
-    wbCtx.strokeStyle = color;
-    wbCtx.lineWidth = size;
+    wbCtx.strokeStyle = wbTool === 'eraser' ? '#181824' : wbColor;
+    wbCtx.lineWidth = wbTool === 'eraser' ? wbEraserSize : (wbTool === 'highlighter' ? wbHighlighterSize : wbPenSize);
+    wbCtx.globalAlpha = wbTool === 'highlighter' ? 0.3 : 1;
     wbCtx.lineCap = 'round';
     wbCtx.lineJoin = 'round';
+    wbCtx.lineTo(x, y);
+    wbCtx.stroke();
+    wbCtx.beginPath();
+    wbCtx.moveTo(x, y);
+    wbCtx.restore();
+  }
+
+  function onPointerUp(e) {
+    if (wbPanning) { wbPanning = false; return; }
+    if (!wbDrawing) return;
+    wbDrawing = false;
+    const { x, y } = canvasXY(e);
+
+    if (wbShapeStart) {
+      wbOCtx.clearRect(0, 0, wbCanvasW, wbCanvasH);
+      drawShapeOnCanvas(wbTool, wbShapeStart, { x, y }, wbColor, wbPenSize);
+      wbStrokes.push({ type: 'shape', shape: wbTool, start: wbShapeStart, end: { x, y }, color: wbColor, size: wbPenSize });
+      broadcastData({ type: 'wb-shape', shape: wbTool, start: wbShapeStart, end: { x, y }, color: wbColor, size: wbPenSize });
+      wbShapeStart = null;
+      return;
+    }
+
+    if (_liveStrokePoints.length > 1) {
+      const strokeData = {
+        type: 'stroke',
+        points: _liveStrokePoints.slice(),
+        color: wbTool === 'eraser' ? '#181824' : wbColor,
+        size: wbTool === 'eraser' ? wbEraserSize : (wbTool === 'highlighter' ? wbHighlighterSize : wbPenSize),
+        tool: wbTool,
+        alpha: wbTool === 'highlighter' ? 0.3 : 1
+      };
+      wbStrokes.push(strokeData);
+      broadcastData({ type: 'wb-stroke', ...strokeData });
+    }
+    _liveStrokePoints = [];
+  }
+
+  function drawShapeOnContext(ctx, shape, start, end, color, size) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = size;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+
+    if (shape === 'line') {
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    } else if (shape === 'arrow') {
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      const angle = Math.atan2(end.y - start.y, end.x - start.x);
+      const headLen = size * 3 + 8;
+      ctx.beginPath();
+      ctx.moveTo(end.x, end.y);
+      ctx.lineTo(end.x - headLen * Math.cos(angle - Math.PI / 6), end.y - headLen * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(end.x - headLen * Math.cos(angle + Math.PI / 6), end.y - headLen * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+    } else if (shape === 'rect') {
+      ctx.strokeRect(Math.min(start.x, end.x), Math.min(start.y, end.y), Math.abs(end.x - start.x), Math.abs(end.y - start.y));
+    } else if (shape === 'circle') {
+      const rx = Math.abs(end.x - start.x) / 2;
+      const ry = Math.abs(end.y - start.y) / 2;
+      const cx = Math.min(start.x, end.x) + rx;
+      const cy = Math.min(start.y, end.y) + ry;
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawShapeOnCanvas(shape, start, end, color, size) {
+    if (!wbCtx) return;
+    drawShapeOnContext(wbCtx, shape, start, end, color, size);
+  }
+
+  function drawTextOnCanvas(text, x, y, color, size) {
+    if (!wbCtx) return;
+    wbCtx.save();
+    wbCtx.fillStyle = color;
+    wbCtx.font = `600 ${size}px 'DM Sans', sans-serif`;
+    wbCtx.fillText(text, x, y);
+    wbCtx.restore();
+  }
+
+  function replayLivePoints(points, color, size, tool, alpha) {
+    if (!wbCtx || !points || points.length < 2) return;
+    wbCtx.save();
+    wbCtx.strokeStyle = color;
+    wbCtx.lineWidth = size;
     wbCtx.globalAlpha = alpha || 1;
+    wbCtx.lineCap = 'round';
+    wbCtx.lineJoin = 'round';
+    wbCtx.beginPath();
     wbCtx.moveTo(points[0].x, points[0].y);
     for (let i = 1; i < points.length; i++) {
       wbCtx.lineTo(points[i].x, points[i].y);
     }
     wbCtx.stroke();
     wbCtx.restore();
-    wbCtx.beginPath();
   }
 
-  function replayBlockErase(rect) {
-    if (!wbCtx || !rect) return;
-    wbCtx.fillStyle = '#1e1e2e';
-    wbCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  function replayStroke(points, color, size, tool, alpha) {
+    replayLivePoints(points, color, size, tool, alpha);
   }
 
-  /** Replay all stored strokes (used after undo or canvas resize) */
   function replayAllStrokes() {
-    if (!wbCtx) return;
-    wbCtx.fillStyle = '#1e1e2e';
-    wbCtx.fillRect(0, 0, wbCanvasW, wbCanvasH);
+    renderCanvasGrid();
     for (const cmd of wbStrokes) {
-      if (cmd.type === 'stroke') {
-        replayStroke(cmd.points, cmd.color, cmd.size, cmd.tool, cmd.alpha);
-      } else if (cmd.type === 'block-erase') {
-        replayBlockErase(cmd.rect);
-      } else if (cmd.type === 'clear') {
-        wbCtx.fillStyle = '#1e1e2e';
-        wbCtx.fillRect(0, 0, wbCanvasW, wbCanvasH);
-      }
+      if (cmd.type === 'stroke') replayStroke(cmd.points, cmd.color, cmd.size, cmd.tool, cmd.alpha);
+      else if (cmd.type === 'shape') drawShapeOnCanvas(cmd.shape, cmd.start, cmd.end, cmd.color, cmd.size);
+      else if (cmd.type === 'text') drawTextOnCanvas(cmd.text, cmd.x, cmd.y, cmd.color, cmd.size);
     }
   }
 
-  /** Grow canvas when strokes approach its edges */
-  function maybeGrowCanvas(points) {
-    let needW = wbCanvasW;
-    let needH = wbCanvasH;
-    const PAD = 512;
-    for (const p of points) {
-      if (p.x + PAD > needW) needW = Math.ceil((p.x + PAD) / 1024) * 1024;
-      if (p.y + PAD > needH) needH = Math.ceil((p.y + PAD) / 1024) * 1024;
-    }
-    if (needW > wbCanvasW || needH > wbCanvasH) {
-      growCanvas(Math.max(needW, wbCanvasW), Math.max(needH, wbCanvasH));
-    }
+  function renderRemoteCursors() {
+    if (!wbOCtx) return;
+    wbOCtx.clearRect(0, 0, wbCanvasW, wbCanvasH);
+
+    const now = Date.now();
+    Object.entries(wbRemoteCursors).forEach(([uId, cur]) => {
+      if (now - cur.lastSeen > 5000) return;
+      wbOCtx.save();
+      wbOCtx.fillStyle = cur.color;
+      wbOCtx.beginPath();
+      wbOCtx.arc(cur.x, cur.y, 5 / wbZoom, 0, Math.PI * 2);
+      wbOCtx.fill();
+
+      wbOCtx.fillStyle = 'rgba(0,0,0,0.7)';
+      wbOCtx.fillRect(cur.x + 8 / wbZoom, cur.y - 12 / wbZoom, 80 / wbZoom, 18 / wbZoom);
+      wbOCtx.fillStyle = '#fff';
+      wbOCtx.font = `${11 / wbZoom}px sans-serif`;
+      wbOCtx.fillText(cur.name, cur.x + 12 / wbZoom, cur.y);
+      wbOCtx.restore();
+    });
   }
 
-  /** Resize canvas to new dimensions and replay all strokes */
-  function growCanvas(newW, newH) {
-    // Cap at 16384 to stay within browser limits
-    newW = Math.min(newW, 16384);
-    newH = Math.min(newH, 16384);
-    if (newW <= wbCanvasW && newH <= wbCanvasH) return;
-    wbCanvasW = newW;
-    wbCanvasH = newH;
-    if (wbCanvas) { wbCanvas.width = wbCanvasW; wbCanvas.height = wbCanvasH; }
-    if (wbOverlay) { wbOverlay.width = wbCanvasW; wbOverlay.height = wbCanvasH; }
-    replayAllStrokes();
-  }
-
-  /** Called when zooming out — ensure canvas covers visible area */
-  function ensureCanvasCoversView() {
-    const vs = getWrapSize();
-    const neededW = Math.ceil(vs.w / wbZoom + Math.abs(wbPanX)) + 512;
-    const neededH = Math.ceil(vs.h / wbZoom + Math.abs(wbPanY)) + 512;
-    if (neededW > wbCanvasW || neededH > wbCanvasH) {
-      growCanvas(
-        Math.max(neededW, wbCanvasW),
-        Math.max(neededH, wbCanvasH)
-      );
-    }
-  }
-
-  function undoCanvas() {
+  function undoCanvasLocal() {
     if (wbStrokes.length === 0 || !wbCtx) return;
-    const removed = wbStrokes.pop();
-    wbRedoStrokes.push(removed);
-    if (wbRedoStrokes.length > 200) wbRedoStrokes.shift();
+    wbRedoStrokes.push(wbStrokes.pop());
     replayAllStrokes();
   }
 
-  function redoCanvas() {
+  function redoCanvasLocal() {
     if (wbRedoStrokes.length === 0 || !wbCtx) return;
-    const cmd = wbRedoStrokes.pop();
-    wbStrokes.push(cmd);
-    // Just replay the one command on top (faster than full replay)
-    if (cmd.type === 'stroke') {
-      replayStroke(cmd.points, cmd.color, cmd.size, cmd.tool, cmd.alpha);
-    } else if (cmd.type === 'block-erase') {
-      replayBlockErase(cmd.rect);
-    } else if (cmd.type === 'clear') {
-      wbCtx.fillStyle = '#1e1e2e';
-      wbCtx.fillRect(0, 0, wbCanvasW, wbCanvasH);
-    }
+    wbStrokes.push(wbRedoStrokes.pop());
+    replayAllStrokes();
   }
 
   function clearCanvasLocal() {
     if (!wbCtx || !wbCanvas) return;
-    wbCtx.fillStyle = '#1e1e2e';
-    wbCtx.fillRect(0, 0, wbCanvas.width, wbCanvas.height);
-    wbStrokes.push({ type: 'clear' });
+    wbStrokes = [];
     wbRedoStrokes = [];
+    renderCanvasGrid();
   }
 
-  /* --- Fullscreen --- */
-  function toggleWbFullscreen() {
-    const panel = document.getElementById('srWhiteboardPanel');
-    if (!panel) return;
-    if (!document.fullscreenElement) {
-      panel.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
-    }
-  }
-
-  /* --- Download whiteboard as PNG --- */
   function downloadWhiteboard() {
     if (!wbCanvas) return;
-    const { x, y, w, h } = getContentBounds();
-    const tmp = document.createElement('canvas');
-    tmp.width = w;
-    tmp.height = h;
-    const tCtx = tmp.getContext('2d');
-    tCtx.drawImage(wbCanvas, x, y, w, h, 0, 0, w, h);
-    tmp.toBlob(blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `whiteboard-${Date.now()}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-      if (typeof showNotification === 'function') showNotification('Whiteboard downloaded!', 'success');
-    }, 'image/png');
+    const a = document.createElement('a');
+    a.href = wbCanvas.toDataURL('image/png');
+    a.download = `StudyRoom-Whiteboard-${Date.now()}.png`;
+    a.click();
+    notify('Whiteboard downloaded.', 'success');
   }
 
-  /* --- Save whiteboard to library --- */
   async function saveWhiteboardToLibrary() {
     if (!wbCanvas) return;
-    let name = 'Whiteboard';
-    if (typeof window.showPrompt === 'function') {
-      const input = await window.showPrompt('Save Whiteboard', 'Enter a name for this whiteboard:', 'Whiteboard ' + new Date().toLocaleDateString());
-      if (!input) return;
-      name = input;
-    }
-    const { x, y, w, h } = getContentBounds();
-    const tmp = document.createElement('canvas');
-    tmp.width = w;
-    tmp.height = h;
-    const tCtx = tmp.getContext('2d');
-    tCtx.drawImage(wbCanvas, x, y, w, h, 0, 0, w, h);
-    tmp.toBlob(async blob => {
+    wbCanvas.toBlob(async (blob) => {
       if (!blob) return;
-      try {
-        const id = 'wb-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-        if (typeof window.savePdfBlob === 'function') {
-          await window.savePdfBlob(id, blob);
-        }
-        if (!window.documents) window.documents = {};
-        if (!window.documents['Whiteboards']) window.documents['Whiteboards'] = {};
-        const safeName = name.replace(/[<>"'&]/g, '').trim() || 'Whiteboard';
-        window.documents['Whiteboards'][safeName + '.png'] = 'blob-id:' + id;
-        if (typeof window.saveCustomDocuments === 'function') window.saveCustomDocuments();
-        if (typeof window.renderTiles === 'function' && typeof window.getCurrentDocumentsLevel === 'function') {
-          window.renderTiles(window.getCurrentDocumentsLevel());
-        }
-        if (typeof showNotification === 'function') showNotification(`"${safeName}" saved to Library → Whiteboards!`, 'success');
-      } catch (err) {
-        console.error('Failed to save whiteboard:', err);
-        if (typeof showNotification === 'function') showNotification('Failed to save whiteboard', 'error');
+      const file = new File([blob], `Whiteboard-${Date.now()}.png`, { type: 'image/png' });
+      if (typeof window.importFileFromAnySource === 'function') {
+        await window.importFileFromAnySource(file);
+        notify('Whiteboard saved to Library.', 'success');
       }
     }, 'image/png');
   }
 
-  /* --- Get bounding box from stroke commands (fast, no pixel scan) --- */
-  function getContentBounds() {
-    if (!wbCtx || !wbCanvas) return { x: 0, y: 0, w: wbCanvasW, h: wbCanvasH };
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    let found = false;
-    for (const cmd of wbStrokes) {
-      if (cmd.type === 'clear') { found = false; minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity; continue; }
-      if (cmd.points) {
-        for (const p of cmd.points) {
-          found = true;
-          if (p.x < minX) minX = p.x;
-          if (p.x > maxX) maxX = p.x;
-          if (p.y < minY) minY = p.y;
-          if (p.y > maxY) maxY = p.y;
-        }
-      }
-      if (cmd.rect) {
-        found = true;
-        // block-erase might not contribute visible content, skip
-      }
+  function maybeGrowCanvas(points) {
+    let needW = wbCanvasW;
+    let needH = wbCanvasH;
+    for (const p of points) {
+      if (p.x + 500 > needW) needW += 1024;
+      if (p.y + 500 > needH) needH += 1024;
     }
-    if (!found) {
-      const vs = getWrapSize();
-      const cx = Math.max(0, Math.floor(wbPanX));
-      const cy = Math.max(0, Math.floor(wbPanY));
-      return { x: cx, y: cy, w: Math.min(vs.w, wbCanvasW - cx), h: Math.min(vs.h, wbCanvasH - cy) };
+    if (needW > wbCanvasW || needH > wbCanvasH) {
+      wbCanvasW = Math.min(16384, needW);
+      wbCanvasH = Math.min(16384, needH);
+      if (wbCanvas) { wbCanvas.width = wbCanvasW; wbCanvas.height = wbCanvasH; }
+      if (wbOverlay) { wbOverlay.width = wbCanvasW; wbOverlay.height = wbCanvasH; }
+      replayAllStrokes();
     }
-    const pad = 60;
-    minX = Math.max(0, Math.floor(minX) - pad);
-    minY = Math.max(0, Math.floor(minY) - pad);
-    maxX = Math.min(wbCanvasW - 1, Math.ceil(maxX) + pad);
-    maxY = Math.min(wbCanvasH - 1, Math.ceil(maxY) + pad);
-    return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
   }
 
-  /* --- question / answer text areas --- */
+  /* ================================================================
+     QUESTIONS & NOTES
+     ================================================================ */
   function addQuestion() {
     const id = wbNextQId++;
     wbQuestions.push({ id, question: '', answer: '' });
     renderQuestionsUI();
-    syncQuestions();
+    broadcastData({ type: 'wb-questions', questions: wbQuestions, nextId: wbNextQId });
   }
 
   function renderQuestionsUI() {
     const list = document.getElementById('srWbQList');
     if (!list) return;
+
     if (wbQuestions.length === 0) {
-      list.innerHTML = '<div class="sr-wb-q-empty"><i class="fas fa-clipboard-list"></i><p>No questions yet. Click <b>Add</b> to create one.</p></div>';
+      list.innerHTML = '<div class="sr-wb-q-empty"><i class="fas fa-clipboard-list"></i><p>No questions added yet.</p></div>';
       return;
     }
+
     list.innerHTML = wbQuestions.map((q, idx) => `
       <div class="sr-wb-q-item" data-qid="${q.id}">
         <div class="sr-wb-q-num">Q${idx + 1}
           <button class="sr-wb-q-del" data-qid="${q.id}" title="Remove"><i class="fas fa-times"></i></button>
         </div>
-        <textarea class="sr-wb-q-textarea" data-field="question" data-qid="${q.id}" placeholder="Type your question…" rows="2">${escapeHTML(q.question)}</textarea>
-        <textarea class="sr-wb-q-textarea sr-wb-q-answer" data-field="answer" data-qid="${q.id}" placeholder="Type your answer…" rows="3">${escapeHTML(q.answer)}</textarea>
+        <textarea class="sr-wb-q-textarea" data-field="question" data-qid="${q.id}" placeholder="Type question / topic…">${escapeHTML(q.question)}</textarea>
+        <textarea class="sr-wb-q-textarea sr-wb-q-answer" data-field="answer" data-qid="${q.id}" placeholder="Type notes / solution…">${escapeHTML(q.answer)}</textarea>
       </div>
     `).join('');
+
     list.querySelectorAll('.sr-wb-q-textarea').forEach(ta => {
       ta.addEventListener('input', e => {
         const qid = parseInt(e.target.dataset.qid);
         const field = e.target.dataset.field;
-        const q = wbQuestions.find(q => q.id === qid);
-        if (q) { q[field] = e.target.value; syncQuestions(); }
+        const q = wbQuestions.find(item => item.id === qid);
+        if (q) {
+          q[field] = e.target.value;
+          broadcastData({ type: 'wb-questions', questions: wbQuestions, nextId: wbNextQId });
+        }
       });
     });
+
     list.querySelectorAll('.sr-wb-q-del').forEach(btn => {
       btn.addEventListener('click', e => {
         const qid = parseInt(e.currentTarget.dataset.qid);
         wbQuestions = wbQuestions.filter(q => q.id !== qid);
         renderQuestionsUI();
-        syncQuestions();
+        broadcastData({ type: 'wb-questions', questions: wbQuestions, nextId: wbNextQId });
       });
     });
   }
 
-  let _qSyncTimer = null;
-  function syncQuestions() {
-    clearTimeout(_qSyncTimer);
-    _qSyncTimer = setTimeout(() => {
-      broadcastData({ type: 'wb-questions', questions: wbQuestions, nextId: wbNextQId });
-    }, 400);
+  /* ================================================================
+     UI UPDATES & CLEANUP
+     ================================================================ */
+  function updateParticipantsUI() {
+    const list = document.getElementById('srParticipantsList');
+    if (list) list.innerHTML = buildParticipantsHTML();
+    syncVideoTiles();
+    updatePeopleCount();
+  }
+
+  function updateProgressUI() {
+    const list = document.getElementById('srProgressList');
+    if (list) list.innerHTML = buildProgressHTML();
+  }
+
+  function updatePeopleCount() {
+    const badge = document.getElementById('srPeopleCount');
+    if (badge) badge.textContent = 1 + Object.keys(peers).length;
   }
 
   /* ================================================================
-     WEBRTC MEDIA (MIC/CAMERA)
+     SESSION FLOW (CREATE / JOIN / LEAVE) - 10-DIGIT CODEC ROUTER
      ================================================================ */
-  async function toggleMicrophone() {
-     micActive = !micActive;
-     await updateLocalMediaStream();
-     updateMediaButtons();
-  }
+  async function handleCreate() {
+    SoundFX.init();
+    nickname = document.getElementById('srNickname')?.value.trim() || 'Host';
+    localStorage.setItem('questionary-study-nickname', nickname);
+    roomPassword = document.getElementById('srCreatePassword')?.value || '';
+    isHost = true;
 
-  async function toggleCamera() {
-     camActive = !camActive;
-     await updateLocalMediaStream();
-     updateMediaButtons();
-  }
+    try {
+      showLoading('Creating room…');
 
-  async function setMicrophoneState(state) {
-     if (micActive === state) return;
-     micActive = state;
-     await updateLocalMediaStream();
-     updateMediaButtons();
-  }
-  
-  function updateMediaButtons() {
-     const mbtn = document.getElementById('srToggleMic');
-     if(mbtn) {
-       mbtn.innerHTML = `<i class="fas fa-${micActive ? 'microphone' : 'microphone-slash'}" style="${micActive ? '' : 'color: #ef4444;'}"></i>`;
-       mbtn.classList.toggle('sr-ctrl-active', micActive);
-     }
-     const cbtn = document.getElementById('srToggleCamera');
-     if(cbtn) {
-       cbtn.innerHTML = `<i class="fas fa-${camActive ? 'video' : 'video-slash'}" style="${camActive ? '' : 'color: #ef4444;'}"></i>`;
-       cbtn.classList.toggle('sr-ctrl-active', camActive);
-     }
-  }
+      const serverInfo = await tauriInvoke('start_study_server', { password: roomPassword });
 
-  async function updateLocalMediaStream() {
-    if (!micActive && !camActive) {
-      if (localMediaStream) {
-        const tracks = localMediaStream.getTracks();
-        tracks.forEach(t => { try { t.stop() } catch(e) {} });
-        localMediaStream = null;
+      let targetWsUrl = '';
+      if (serverInfo && serverInfo.port) {
+        const localIp = (serverInfo.ips && serverInfo.ips.length > 0) ? serverInfo.ips[0] : '127.0.0.1';
+        roomAddress = ipPortToCode(localIp, serverInfo.port);
+        targetWsUrl = `ws://127.0.0.1:${serverInfo.port}`;
+      } else {
+        roomAddress = generateRandomCode();
+        targetWsUrl = 'ws://127.0.0.1:8080';
       }
-      Object.values(peerMediaConnections).forEach(pc => pc.close());
-      peerMediaConnections = {};
-      renderLocalCam(null);
-      broadcastData({ type: 'webrtc-media-stop' });
+
+      await connectWebSocket(targetWsUrl, () => {
+        sendToServer({ action: 'host', nickname, password: roomPassword, room: '_local' });
+      });
+
+    } catch (err) {
+      hideLoading();
+      cleanup();
+      renderStudyRoom();
+      notify('Could not start study room: ' + (err.message || err), 'error');
+    }
+  }
+
+  async function handleJoin() {
+    SoundFX.init();
+    nickname = document.getElementById('srNickname')?.value.trim() || 'Student';
+    localStorage.setItem('questionary-study-nickname', nickname);
+    const rawInput = document.getElementById('srJoinAddress')?.value.trim();
+    if (!rawInput) {
+      notify('Please enter a 10-digit room code.', 'error');
+      return;
+    }
+    roomPassword = document.getElementById('srJoinPassword')?.value || '';
+    isHost = false;
+
+    let targetWsUrl = '';
+    const cleanCode = normalizeRoomCode(rawInput);
+
+    const decoded = codeToIpPort(cleanCode);
+    if (decoded) {
+      targetWsUrl = `ws://${decoded.ip}:${decoded.port}`;
+      roomAddress = cleanCode;
+    } else if (rawInput.includes(':')) {
+      targetWsUrl = `ws://${rawInput.replace(/^ws:\/\//, '')}`;
+      roomAddress = rawInput;
+    } else {
+      notify('Invalid room code format. Check the 10-digit code.', 'error');
       return;
     }
 
     try {
-       const savedVideoId = localStorage.getItem('questionary-video-id') || undefined;
-       const savedAudioId = localStorage.getItem('questionary-audio-id') || undefined;
-       
-       const videoConstraints = camActive ? (savedVideoId ? { deviceId: { exact: savedVideoId } } : true) : false;
-       const audioConstraints = micActive ? (savedAudioId ? { deviceId: { exact: savedAudioId } } : true) : false;
-
-       // Pre-stop any existing stream natively so WebKitGTK releases device handles cleanly
-       if (localMediaStream) {
-          const oldTracks = localMediaStream.getTracks();
-          oldTracks.forEach(t => { try { t.stop() } catch(e) {} });
-          localMediaStream = null;
-       }
-
-       const stream = await navigator.mediaDevices.getUserMedia({ 
-           video: videoConstraints, 
-           audio: audioConstraints 
-       });
-       
-       localMediaStream = stream;
-       
-       Object.keys(peers).forEach(peerId => {
-          createRTCPeerMediaConnection(peerId, true);
-       });
-       renderLocalCam(localMediaStream);
-    } catch(err) {
-       console.error("Failed media access", err);
-       micActive = false; camActive = false;
-       const mbtn = document.getElementById('srToggleMic');
-       if(mbtn) mbtn.innerHTML = '<i class="fas fa-microphone-slash" style="color: #ef4444;"></i>';
-       const cbtn = document.getElementById('srToggleCamera');
-       if(cbtn) cbtn.innerHTML = '<i class="fas fa-video-slash" style="color: #ef4444;"></i>';
-       if (typeof showNotification === 'function') showNotification('Media access denied', 'error');
+      showLoading('Connecting to study room…');
+      await connectWebSocket(targetWsUrl, () => {
+        sendToServer({ action: 'join', nickname, password: roomPassword, room: '_local' });
+      });
+    } catch (err) {
+      hideLoading();
+      cleanup();
+      renderStudyRoom();
+      notify(err.message || 'Room not found or host is offline.', 'error');
     }
   }
 
-  function createRTCPeerMediaConnection(targetId, isOffer) {
-    if (peerMediaConnections[targetId]) peerMediaConnections[targetId].close();
-    const pc = new RTCPeerConnection(rtcConfig);
-    peerMediaConnections[targetId] = pc;
+  async function leaveRoom() {
+    if (typeof window.showConfirm === 'function') {
+      const ok = await window.showConfirm('Leave Study Room?');
+      if (!ok) return;
+    }
+    doLeave();
+    renderStudyRoom();
+    notify('Left study session.', 'info');
+  }
 
-    pc.onicecandidate = e => {
-      if (e.candidate) {
-        sendToTarget(targetId, { type: 'webrtc-media-ice', candidate: e.candidate });
-      }
-    };
+  function forceLeaveRoom() {
+    doLeave();
+    renderStudyRoom();
+  }
 
-    pc.ontrack = e => renderRemoteCam(targetId, e.streams[0]);
+  function doLeave() {
+    if (mainInterval) { clearInterval(mainInterval); mainInterval = null; }
+    if (speechInterval) { clearInterval(speechInterval); speechInterval = null; }
+    stopScreenShare();
 
     if (localMediaStream) {
-      localMediaStream.getTracks().forEach(track => pc.addTrack(track, localMediaStream));
+      localMediaStream.getTracks().forEach(t => t.stop());
+      localMediaStream = null;
     }
 
-    if (isOffer) {
-      pc.createOffer().then(sdp => {
-        pc.setLocalDescription(sdp);
-        sendToTarget(targetId, { type: 'webrtc-media-offer', sdp });
+    for (const [, pc] of peerConnections.entries()) {
+      try { pc.close(); } catch (e) {}
+    }
+    peerConnections.clear();
+    remoteStreams.clear();
+
+    if (socket) {
+      try { socket.close(); } catch (_) {}
+      socket = null;
+    }
+
+    if (isHost) {
+      tauriInvoke('stop_study_server').catch(() => {});
+    }
+
+    sessionActive = false;
+    isHost = false;
+    myId = '';
+    peers = {};
+    screenShareOwnerId = null;
+    roomAddress = '';
+    roomPassword = '';
+    chatMessages = [];
+    studyGoal = '';
+    timerSeconds = 0;
+    timerRemaining = 25 * 60;
+    timerRunning = false;
+    timerMode = 'stopwatch';
+    wbActive = false;
+    unreadChatCount = 0;
+    handRaised = false;
+    micActive = false;
+    camActive = false;
+    isSpeaking = false;
+  }
+
+  function cleanup() {
+    if (socket) { try { socket.close(); } catch (_) {} socket = null; }
+    for (const [, pc] of peerConnections.entries()) {
+      try { pc.close(); } catch (e) {}
+    }
+    peerConnections.clear();
+    remoteStreams.clear();
+    sessionActive = false;
+    isHost = false;
+    myId = '';
+    peers = {};
+    screenShareOwnerId = null;
+  }
+
+  function showLoading(msg) {
+    let overlay = document.getElementById('srLoadingOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'srLoadingOverlay';
+      overlay.className = 'sr-loading-overlay';
+      document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = `<div class="sr-loading-box"><div class="sr-spinner"></div><p>${msg || 'Connecting…'}</p></div>`;
+    overlay.style.display = 'flex';
+  }
+
+  function hideLoading() {
+    const overlay = document.getElementById('srLoadingOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  /* ================================================================
+     MEDIA SETTINGS TESTING UTILITIES (Called by Settings Modal)
+     ================================================================ */
+  async function testMicrophone() {
+    try {
+      const select = document.getElementById('audioInputSelect');
+      const deviceId = select ? select.value : undefined;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: deviceId ? { deviceId: { exact: deviceId } } : true
       });
-    }
-  }
 
-  async function handleMediaRTCReceiveOffer(fromId, sdp) {
-    if (!peerMediaConnections[fromId]) createRTCPeerMediaConnection(fromId, false);
-    const pc = peerMediaConnections[fromId];
-    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    sendToTarget(fromId, { type: 'webrtc-media-answer', sdp: answer });
-  }
+      const row = document.getElementById('micTestVolumeRow');
+      const bar = document.getElementById('micTestVolumeBar');
+      if (row) row.style.display = 'flex';
 
-  async function handleMediaRTCReceiveAnswer(fromId, sdp) {
-    if(peerMediaConnections[fromId]) {
-      await peerMediaConnections[fromId].setRemoteDescription(new RTCSessionDescription(sdp));
-    }
-  }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
 
-  async function handleMediaRTCReceiveIce(fromId, candidate) {
-    if(peerMediaConnections[fromId]) {
-      await peerMediaConnections[fromId].addIceCandidate(new RTCIceCandidate(candidate));
-    }
-  }
-
-  function renderLocalCam(stream) {
-    const localTile = document.querySelector('.sr-video-local');
-    if (!localTile) return;
-    const off = localTile.querySelector('.sr-video-off');
-    
-    let camVideo = localTile.querySelector('.sr-cam-video');
-    if (!stream) {
-       if (camVideo) {
-           camVideo.pause();
-           camVideo.srcObject = null;
-           camVideo.removeAttribute('src');
-           camVideo.load();
-           camVideo.remove();
-       }
-       if (!localTile.querySelector('.sr-screen-video') && off) off.style.display = 'flex';
-       return;
-    }
-    
-    if (off) off.style.display = 'none';
-    if (!camVideo) {
-        camVideo = document.createElement('video');
-        camVideo.className = 'sr-cam-video';
-        camVideo.autoplay = true;
-        camVideo.playsInline = true;
-        camVideo.muted = true;
-        camVideo.style.width = '100%';
-        camVideo.style.height = '100%';
-        camVideo.style.objectFit = 'cover';
-        camVideo.style.borderRadius = '8px';
-        localTile.insertBefore(camVideo, localTile.firstChild);
-    }
-    camVideo.srcObject = stream;
-    camVideo.play().catch(e => console.warn('Cam play prevented', e));
-    
-    // Style adjustments if screen share is also active
-    if (localTile.querySelector('.sr-screen-video')) {
-        camVideo.style.position = 'absolute';
-        camVideo.style.width = '30%';
-        camVideo.style.height = 'auto';
-        camVideo.style.bottom = '10px';
-        camVideo.style.right = '10px';
-        camVideo.style.zIndex = '5';
-        camVideo.style.border = '2px solid rgba(255,255,255,0.5)';
-    } else {
-        camVideo.style.position = 'absolute';
-        camVideo.style.width = '100%';
-        camVideo.style.height = '100%';
-        camVideo.style.bottom = '0';
-        camVideo.style.right = '0';
-        camVideo.style.border = 'none';
-        camVideo.style.zIndex = '1';
-    }
-  }
-
-  function renderRemoteCam(targetId, stream) {
-    const grid = document.getElementById('srParticipantsGrid');
-    if (!grid) return;
-    const tiles = grid.querySelectorAll('.sr-video-tile:not(.sr-video-local)');
-    let targetTile = null;
-    tiles.forEach(t => {
-       const lbl = t.querySelector('.sr-video-label');
-       if (lbl && lbl.textContent.includes(peers[targetId]?.nickname)) {
-           targetTile = t;
-       }
-    });
-    if (!targetTile) return;
-
-    const off = targetTile.querySelector('.sr-video-off');
-    if (off) off.style.display = 'none';
-
-    let camVideo = targetTile.querySelector('.sr-cam-video');
-    if (!camVideo) {
-        camVideo = document.createElement('video');
-        camVideo.className = 'sr-cam-video';
-        camVideo.autoplay = true;
-        camVideo.playsInline = true;
-        camVideo.style.width = '100%';
-        camVideo.style.height = '100%';
-        camVideo.style.objectFit = 'cover';
-        
-        const savedAudioOut = localStorage.getItem('questionary-audio-out-id');
-        if (savedAudioOut && typeof camVideo.setSinkId === 'function') {
-            camVideo.setSinkId(savedAudioOut).catch(console.error);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let count = 0;
+      const interval = setInterval(() => {
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        const vol = Math.min(100, Math.round((sum / data.length) * 2));
+        if (bar) bar.style.width = vol + '%';
+        count++;
+        if (count > 50) {
+          clearInterval(interval);
+          stream.getTracks().forEach(t => t.stop());
+          ctx.close();
+          if (row) row.style.display = 'none';
         }
-
-        targetTile.insertBefore(camVideo, targetTile.firstChild);
+      }, 100);
+      notify('Testing microphone for 5 seconds… Speak now.', 'info');
+    } catch (e) {
+      notify('Microphone test failed: ' + e.message, 'error');
     }
-    camVideo.srcObject = stream;
-    camVideo.play().catch(e => console.warn('Cam play prevented', e));
+  }
 
-    // Adjust style if screenshare is also open
-    if (targetTile.querySelector('.sr-screen-video')) {
-        camVideo.style.position = 'absolute';
-        camVideo.style.width = '30%';
-        camVideo.style.height = 'auto';
-        camVideo.style.bottom = '10px';
-        camVideo.style.right = '10px';
-        camVideo.style.zIndex = '5';
-        camVideo.style.border = '2px solid rgba(255,255,255,0.5)';
-        camVideo.style.borderRadius = '8px';
-    } else {
-        camVideo.style.position = 'absolute';
-        camVideo.style.width = '100%';
-        camVideo.style.height = '100%';
-        camVideo.style.bottom = '0';
-        camVideo.style.right = '0';
-        camVideo.style.border = 'none';
-        camVideo.style.zIndex = '1';
+  function testSpeaker() {
+    SoundFX.playChime();
+    notify('Playing test sound…', 'info');
+  }
+
+  async function testCamera() {
+    const container = document.getElementById('camTestContainer');
+    const video = document.getElementById('camTestVideo');
+    const select = document.getElementById('videoInputSelect');
+    const deviceId = select ? select.value : undefined;
+
+    if (!container || !video) return;
+
+    if (container.style.display !== 'none' && video.srcObject) {
+      video.srcObject.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+      container.style.display = 'none';
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: deviceId ? { deviceId: { exact: deviceId } } : true
+      });
+      video.srcObject = stream;
+      container.style.display = 'block';
+      notify('Camera test active. Click Test again to stop.', 'info');
+    } catch (e) {
+      notify('Camera test failed: ' + e.message, 'error');
+    }
+  }
+
+  async function initStudyRoomMediaSettings() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioSelect = document.getElementById('audioInputSelect');
+      const videoSelect = document.getElementById('videoInputSelect');
+      const speakerSelect = document.getElementById('audioOutputSelect');
+
+      if (audioSelect) {
+        audioSelect.innerHTML = '<option value="">Default Microphone</option>';
+        devices.filter(d => d.kind === 'audioinput').forEach((d, i) => {
+          audioSelect.innerHTML += `<option value="${d.deviceId}">${d.label || `Microphone ${i + 1}`}</option>`;
+        });
+      }
+
+      if (videoSelect) {
+        videoSelect.innerHTML = '<option value="">Default Camera</option>';
+        devices.filter(d => d.kind === 'videoinput').forEach((d, i) => {
+          videoSelect.innerHTML += `<option value="${d.deviceId}">${d.label || `Camera ${i + 1}`}</option>`;
+        });
+      }
+
+      if (speakerSelect) {
+        speakerSelect.innerHTML = '<option value="">Default Speaker</option>';
+        devices.filter(d => d.kind === 'audiooutput').forEach((d, i) => {
+          speakerSelect.innerHTML += `<option value="${d.deviceId}">${d.label || `Speaker ${i + 1}`}</option>`;
+        });
+      }
+    } catch (e) {
+      console.warn('[StudyRoom] Enumerate devices notice:', e);
     }
   }
 
   /* ================================================================
-     EXPOSE
+     GLOBAL EXPORTS
      ================================================================ */
-  window.srUpdateAudioOutput = function(deviceId) {
-     const videos = document.querySelectorAll('#srParticipantsGrid video');
-     videos.forEach(v => {
-         if (typeof v.setSinkId === 'function') {
-             v.setSinkId(deviceId).catch(console.error);
-         }
-     });
-  };
-
   window.renderStudyRoom = renderStudyRoom;
   window.leaveStudyRoom = leaveRoom;
   window.srToggleMicrophone = toggleMicrophone;
   window.srToggleCamera = toggleCamera;
-  window.srSetMicrophoneState = setMicrophoneState;
+  window.srToggleScreenShare = toggleScreenShare;
+  window.srToggleWB = toggleWhiteboard;
+  window.srToggleHand = toggleRaiseHand;
+  window.srKickUser = (targetId) => {
+    if (isHost) broadcastData({ type: 'mod-kick', targetId });
+  };
   window.wbSelectTool = selectWbTool;
-  window.wbUndo = undoCanvas;
-  window.wbRedo = redoCanvas;
+  window.wbUndo = () => {
+    undoCanvasLocal();
+    broadcastData({ type: 'wb-undo' });
+  };
+  window.wbRedo = () => {
+    redoCanvasLocal();
+    broadcastData({ type: 'wb-redo' });
+  };
   window.isWhiteboardActive = () => wbActive && sessionActive;
+  window.testMicrophone = testMicrophone;
+  window.testSpeaker = testSpeaker;
+  window.testCamera = testCamera;
+  window.initStudyRoomMediaSettings = initStudyRoomMediaSettings;
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', renderStudyRoom);
+  } else {
+    renderStudyRoom();
+  }
 
 })();

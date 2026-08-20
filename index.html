@@ -1,32 +1,363 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<link rel="icon" type="image/png" href="assets/logo.png">
+    <link rel="icon" type="image/png" href="assets/logo.png">
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Questionary</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="css/styles.css?v=210">
-    <link rel="stylesheet" href="css/features.css?v=211">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" crossorigin="anonymous" referrerpolicy="no-referrer">
+    <link rel="stylesheet" href="css/styles.css?v=216">
+    <link rel="stylesheet" href="css/features.css?v=216">
+    <style>
+        /* Mobile Safe Area & Android Touch Optimization */
+        :root {
+            --safe-top: env(safe-area-inset-top, 0px);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            --safe-left: env(safe-area-inset-left, 0px);
+            --safe-right: env(safe-area-inset-right, 0px);
+        }
+
+        /* Ensure Font Awesome Icons Render Correctly in Android WebViews */
+        i.fa, i.fas, i.far, i.fab, i.fal {
+            font-family: "Font Awesome 6 Free", "Font Awesome 6 Brands", sans-serif !important;
+            font-style: normal !important;
+            font-weight: 900 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            text-rendering: auto !important;
+            -webkit-font-smoothing: antialiased !important;
+            -moz-osx-font-smoothing: grayscale !important;
+        }
+
+        body {
+            padding-top: var(--safe-top);
+            padding-left: var(--safe-left);
+            padding-right: var(--safe-right);
+            background: var(--bg, #111113);
+        }
+
+        .mobile-bottom-nav {
+            display: none;
+        }
+
+        /* Dashboard Stat Icons Backgrounds */
+        .stat-icon {
+            width: 40px !important;
+            height: 40px !important;
+            border-radius: 10px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            color: white !important;
+            font-size: 1.1rem !important;
+            flex-shrink: 0 !important;
+        }
+        .stat-icon.documents { background: #cf6215 !important; }
+        .stat-icon.favorites { background: #eab308 !important; }
+        .stat-icon.recent { background: #3b82f6 !important; }
+        .stat-icon.streak { background: #ef4444 !important; }
+
+        /* ================================================================
+           NAV-LINK & SIDEBAR VISIBILITY FIXES
+           ================================================================ */
+        .hamburger-menu, #hamburgerMenu {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            cursor: pointer !important;
+            touch-action: manipulation !important;
+        }
+
+        .nav-links.sidebar-open .nav-link,
+        .nav-links.is-pinned .nav-link,
+        body.vertical-navbar-mode .nav-link {
+            display: flex !important;
+            align-items: center !important;
+            height: 44px !important;
+            padding: 0 12px !important;
+            border-radius: 8px !important;
+            color: var(--fg2, #a0a0ab) !important;
+            text-decoration: none !important;
+            box-sizing: border-box !important;
+            touch-action: manipulation !important;
+        }
+
+        .nav-links.sidebar-open .nav-link i,
+        .nav-links.is-pinned .nav-link i,
+        body.vertical-navbar-mode .nav-link i {
+            display: inline-flex !important;
+            font-size: 1rem !important;
+            width: 24px !important;
+            text-align: center !important;
+            margin-right: 8px !important;
+            color: var(--accent, #cf6215) !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+
+        .nav-links.sidebar-open .nav-link span,
+        .nav-links.is-pinned .nav-link span,
+        body.vertical-navbar-mode .nav-link span {
+            display: inline-block !important;
+            font-size: 0.9rem !important;
+            color: var(--fg, #ededef) !important;
+            font-weight: 500 !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+
+        .nav-links.sidebar-open .nav-link:hover,
+        .nav-links.sidebar-open .nav-link.active,
+        body.vertical-navbar-mode .nav-link:hover,
+        body.vertical-navbar-mode .nav-link.active {
+            background: var(--hover, #18181b) !important;
+            color: var(--accent, #cf6215) !important;
+        }
+
+        /* Modal bottom sheet handle styling */
+        .modal-sheet-handle {
+            display: none;
+            width: 40px;
+            height: 5px;
+            background: var(--line, #2e3035);
+            border-radius: 3px;
+            margin: -4px auto 14px auto;
+        }
+
+        /* ================================================================
+           MOBILE RESPONSIVE OVERHAUL (< 768px)
+           ================================================================ */
+        @media (max-width: 768px) {
+            .header {
+                height: 54px !important;
+                padding: 0 12px !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+                gap: 8px !important;
+                background: var(--surface, #1e1f22) !important;
+                border-bottom: 1px solid var(--border, #2e3035) !important;
+            }
+
+            .header-left {
+                display: flex !important;
+                align-items: center !important;
+                gap: 8px !important;
+            }
+
+            .mobile-menu-toggle {
+                display: none !important;
+            }
+
+            .logo span {
+                display: none !important;
+            }
+
+            .logo-icon {
+                width: 26px !important;
+                height: 26px !important;
+            }
+
+            .header-right {
+                display: flex !important;
+                align-items: center !important;
+                gap: 6px !important;
+                flex: 1 !important;
+                justify-content: flex-end !important;
+            }
+
+            .search-container {
+                flex: 1 !important;
+                max-width: 170px !important;
+                height: 36px !important;
+            }
+
+            .search-input {
+                height: 36px !important;
+                font-size: 0.85rem !important;
+                padding-left: 32px !important;
+            }
+
+            .search-icon {
+                font-size: 0.8rem !important;
+                left: 10px !important;
+            }
+            .update-check-btn,
+            .content-update-btn {
+                display: none !important;
+            }
+            .accessibility-toggle {
+                display: inline-flex !important;
+            }
+
+            .mobile-bottom-nav {
+                display: flex !important;
+                position: fixed !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                height: calc(58px + var(--safe-bottom)) !important;
+                padding-bottom: var(--safe-bottom) !important;
+                background: var(--surface, #1e1f22) !important;
+                border-top: 1px solid var(--border, #2e3035) !important;
+                z-index: 9999 !important;
+                justify-content: space-around !important;
+                align-items: center !important;
+                box-shadow: 0 -4px 20px rgba(0,0,0,0.3) !important;
+                backdrop-filter: blur(12px) !important;
+                -webkit-backdrop-filter: blur(12px) !important;
+            }
+
+            .mobile-bottom-nav-item {
+                flex: 1 !important;
+                height: 56px !important;
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: center !important;
+                justify-content: center !important;
+                background: none !important;
+                border: none !important;
+                color: var(--fg3, #8b8f94) !important;
+                font-size: 0.72rem !important;
+                gap: 3px !important;
+                padding: 4px 0 !important;
+                cursor: pointer !important;
+                user-select: none !important;
+                touch-action: manipulation !important;
+                transition: color 0.15s ease, transform 0.1s ease !important;
+            }
+
+            .mobile-bottom-nav-item i {
+                font-size: 1.25rem !important;
+            }
+
+            .mobile-bottom-nav-item.active {
+                color: var(--accent, #cf6215) !important;
+                font-weight: 700 !important;
+            }
+
+            .mobile-bottom-nav-item:active {
+                transform: scale(0.92) !important;
+            }
+
+            #main-content, .container {
+                padding: 10px 12px calc(76px + var(--safe-bottom)) 12px !important;
+            }
+
+            .dashboard-header {
+                display: grid !important;
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 8px !important;
+                margin-bottom: 14px !important;
+            }
+
+            .stat-card {
+                margin: 0 !important;
+                padding: 10px 12px !important;
+                border-radius: 12px !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 10px !important;
+                background: var(--surface, #1e1f22) !important;
+                border: 1px solid var(--border, #2e3035) !important;
+            }
+
+            .stat-info {
+                display: flex !important;
+                flex-direction: column !important;
+                min-width: 0 !important;
+            }
+
+            .stat-value {
+                font-size: 1.15rem !important;
+                font-weight: 700 !important;
+                line-height: 1.1 !important;
+            }
+
+            .stat-label {
+                font-size: 0.65rem !important;
+                text-transform: uppercase !important;
+                letter-spacing: 0.5px !important;
+                opacity: 0.75 !important;
+            }
+
+            .modal-overlay {
+                align-items: flex-end !important;
+                padding: 0 !important;
+            }
+
+            .modal-overlay .modal,
+            .modal-overlay .modal-content {
+                width: 100% !important;
+                max-width: 100% !important;
+                border-radius: 20px 20px 0 0 !important;
+                margin-top: auto !important;
+                margin-bottom: 0 !important;
+                max-height: 86vh !important;
+                padding: 14px 16px calc(18px + var(--safe-bottom)) 16px !important;
+                animation: slideUpSheet 0.25s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
+            }
+
+            .modal-sheet-handle {
+                display: block !important;
+            }
+
+            @keyframes slideUpSheet {
+                from { transform: translateY(100%); }
+                to { transform: translateY(0); }
+            }
+
+            .tiles-grid, .library-grid {
+                grid-template-columns: repeat(auto-fill, minmax(115px, 1fr)) !important;
+                gap: 8px !important;
+            }
+
+            .tile, .library-item {
+                padding: 12px 8px !important;
+                min-height: 85px !important;
+                touch-action: manipulation !important;
+            }
+
+            .tile:active, .library-item:active {
+                transform: scale(0.96) !important;
+            }
+
+            .tile-icon i, .library-item-icon i {
+                font-size: 1.6rem !important;
+            }
+
+            .tile-text, .library-item-name {
+                font-size: 0.8rem !important;
+            }
+
+            .quick-links-toggle, .timer-reopen-btn {
+                bottom: calc(68px + var(--safe-bottom)) !important;
+            }
+
+            .timer-panel {
+                bottom: calc(68px + var(--safe-bottom)) !important;
+                right: 10px !important;
+                left: 10px !important;
+                width: auto !important;
+                max-width: 100% !important;
+            }
+        }
+    </style>
+    
     <script>
-      // Mock getUserMedia for PeerJS WebRTC checks on strict Linux WebKit environments
-      if (!window.navigator.mediaDevices) { window.navigator.mediaDevices = {}; }
-      if (!window.navigator.mediaDevices.getUserMedia) {
-          window.navigator.mediaDevices.getUserMedia = function() { return Promise.resolve(null); };
-      }
+      window.RTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+      window.RTCSessionDescription = window.RTCSessionDescription || window.webkitRTCSessionDescription;
+      window.RTCIceCandidate = window.RTCIceCandidate || window.webkitRTCIceCandidate;
+      window.MediaStream = window.MediaStream || window.webkitMediaStream;
+      window.AudioContext = window.AudioContext || window.webkitAudioContext;
     </script>
-    <script src="js/peerjs-patched.js"></script>
-    <script>
-      // Purge hot-updater localStorage cache so old CSS/JS never overrides disk files
-      try {
-        localStorage.removeItem('questionary-code-files');
-        localStorage.removeItem('questionary-code-manifest');
-        console.log('[PURGE] Cleared hotUpdater localStorage cache');
-      } catch(e){}
-    </script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/11.1.1/marked.min.js"></script>
 </head>
 <body>
 <div class="loading-overlay active" id="loadingOverlay">
@@ -48,11 +379,11 @@
         <form id="loginForm">
             <div class="form-group">
                 <label for="username" class="form-label">Username</label>
-                <input type="text" id="username" class="form-input" placeholder="Enter username" required>
+                <input type="text" id="username" class="form-input" placeholder="Enter username" required autocomplete="username">
             </div>
             <div class="form-group">
                 <label for="password" class="form-label">Password</label>
-                <input type="password" id="password" class="form-input" placeholder="Enter password" required>
+                <input type="password" id="password" class="form-input" placeholder="Enter password" required autocomplete="current-password">
             </div>
             <div class="form-group checkbox-group">
                 <label class="checkbox-label">
@@ -78,12 +409,12 @@
     
     <header class="header">
         <div class="header-left" id="headerLeft">
-            <button class="hamburger-menu" id="hamburgerMenu" title="Toggle Menu">
+            <button class="hamburger-menu" id="hamburgerMenu" title="Toggle Menu" aria-label="Open Menu">
                 <i class="fas fa-bars"></i>
             </button>
             <div class="logo">
                 <img src="assets/logo.png" alt="Questionary" class="logo-icon">
-                <span>Questionary</span>
+                <span></span>
             </div>
             <button class="mobile-menu-toggle" id="mobileMenuToggle">
                 <i class="fas fa-bars"></i>
@@ -93,7 +424,7 @@
                     <i class="fas fa-graduation-cap"></i>
                     <span>Menu</span>
                 </div>
-                <button class="sidebar-close" id="sidebarClose">
+                <button class="sidebar-close" id="sidebarClose" aria-label="Close Menu">
                     <i class="fas fa-times"></i>
                 </button>
                 <a class="nav-link active" id="homeNav"><i class="fas fa-home"></i><span>Home</span></a>
@@ -107,27 +438,31 @@
                 <a class="nav-link" id="analyticsNav"><i class="fas fa-chart-bar"></i><span>Analytics</span></a>
                 <a class="nav-link" id="remindersNav"><i class="fas fa-bell"></i><span>Reminders</span></a>
                 <a class="nav-link" id="studyRoomNav"><i class="fas fa-users"></i><span>Study Room</span></a>
-                <a class="nav-link" id="settingsNav" style="display:none;"><i class="fas fa-cog"></i><span>Settings</span></a>
+                <a class="nav-link" id="settingsNav"><i class="fas fa-cog"></i><span>Settings</span></a>
             </nav>
         </div>
         <div class="header-right" id="headerRight">
             <div class="search-container">
                 <i class="fas fa-search search-icon"></i>
-                <input type="text" class="search-input" id="globalSearch" placeholder="Search documents...">
+                <input type="text" class="search-input" id="globalSearch" placeholder="Search..." autocomplete="off">
             </div>
-            <button class="accessibility-toggle" id="accessibilityToggle" title="Accessibility Options">
-                <i class="fas fa-universal-access"></i>
-            </button>
-            <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
-                <i class="fas fa-moon" id="themeIcon"></i>
-            </button>
+            
+            <div class="header-actions-row">
+                </button>
+                <button class="accessibility-toggle" id="accessibilityToggle" title="Accessibility Options">
+                    <i class="fas fa-universal-access"></i>
+                </button>
+                <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
+            </div>
+
             <div class="user-badge" id="userBadge">
                 <i class="fas fa-user"></i>
                 <span id="username-display">User</span>
                 <span id="adminBadge" class="admin-badge" style="display:none;">ADMIN</span>
                 <i class="fas fa-chevron-down user-dropdown-arrow"></i>
-                
-                
+
                 <div class="user-dropdown-menu" id="userDropdownMenu">
                     <div class="user-dropdown-header">
                         <div class="dropdown-avatar"><i class="fas fa-user"></i></div>
@@ -217,6 +552,7 @@
                             <button class="dropdown-btn" id="exportDataBtn"><i class="fas fa-download"></i> Export</button>
                             <button class="dropdown-btn" id="importDataBtn"><i class="fas fa-upload"></i> Import</button>
                         </div>
+
                         <button class="dropdown-btn dropdown-btn-danger" id="clearDataBtn"><i class="fas fa-trash-alt"></i> Clear Local Data</button>
                     </div>
                     
@@ -263,7 +599,6 @@
             </div>
         </div>
 
-        
         <div class="breadcrumb-container">
             <button id="backBtn" class="btn-sm" style="display:none;" type="button">
                 <i class="fas fa-arrow-left"></i>
@@ -272,24 +607,22 @@
             <div id="breadcrumb" class="breadcrumb"></div>
         </div>
 
-        
         <div class="search-results" id="searchResults" style="display:none;">
             <div id="searchResultsContainer"></div>
         </div>
 
-        
         <section id="tilesSection" class="tiles-section">
             <div class="section-header">
                 <span class="section-label"><i class="fas fa-folder-open"></i> Documents</span>
                 <div class="view-controls">
-                    <button id="gridView" type="button" class="view-toggle active"><i class="fas fa-th-large"></i></button>
-                    <button id="listView" type="button" class="view-toggle"><i class="fas fa-list"></i></button>
-                    <button id="sortToggle" type="button" class="sort-toggle"><i class="fas fa-sort-alpha-down"></i></button>
+                    <button id="gridView" type="button" class="view-toggle active" title="Grid View"><i class="fas fa-th-large"></i></button>
+                    <button id="listView" type="button" class="view-toggle" title="List View"><i class="fas fa-list"></i></button>
+                    <button id="sortToggle" type="button" class="sort-toggle" title="Sort"><i class="fas fa-sort-alpha-down"></i></button>
                 </div>
             </div>
             <div id="tilesContainer" class="tiles-grid"></div>
             
-            <!-- PDF Viewer with Bookmark Toolbar -->
+            <!-- PDF Viewer -->
             <div id="pdfViewerContainer" style="display:none;">
                 <div class="pdf-toolbar">
                     <button id="backToDocumentsBtn" class="btn btn-secondary" onclick="closePDF()"><i class="fas fa-arrow-left"></i> Back</button>
@@ -300,7 +633,7 @@
                     </div>
                 </div>
                 <div class="pdf-content-wrapper">
-                    <iframe id="pdfViewer"></iframe>
+                    <iframe id="pdfViewer" src="pdfviewer.html"></iframe>
                     <div id="pdfBookmarksPanel" class="bookmarks-panel" style="display:none;">
                         <div class="bookmarks-panel-header">
                             <h4><i class="fas fa-bookmark"></i> Bookmarks</h4>
@@ -313,7 +646,7 @@
                 </div>
             </div>
 
-            <!-- Image Viewer (for whiteboards) -->
+            <!-- Image Viewer -->
             <div id="imageViewerContainer" style="display:none;">
                 <div class="pdf-toolbar">
                     <button class="btn btn-secondary" onclick="closeImageViewer()"><i class="fas fa-arrow-left"></i> Back</button>
@@ -323,28 +656,48 @@
                     </div>
                 </div>
                 <div class="image-viewer-body">
-                    <img id="imageViewerImg" src="" alt="Whiteboard">
+                    <img id="imageViewerImg" src="" alt="Image Viewer">
                 </div>
+            </div>
+
+            <!-- Text & Markdown Viewer -->
+            <div id="textViewerContainer" style="display:none;">
+                <div class="pdf-toolbar">
+                    <button class="btn btn-secondary" onclick="closeTextViewer()"><i class="fas fa-arrow-left"></i> Back</button>
+                    <span id="currentTextName" class="pdf-name"></span>
+                    <div class="pdf-toolbar-actions">
+                        <button class="btn btn-secondary" onclick="copyTextViewerContent()"><i class="fas fa-copy"></i> Copy</button>
+                        <button class="btn btn-primary" onclick="downloadTextContent()"><i class="fas fa-download"></i> Download</button>
+                    </div>
+                </div>
+                <div id="textViewerBody" class="doc-viewer-body"></div>
+            </div>
+
+            <!-- Word Document (.docx) Viewer -->
+            <div id="docxViewerContainer" style="display:none;">
+                <div class="pdf-toolbar">
+                    <button class="btn btn-secondary" onclick="closeDocxViewer()"><i class="fas fa-arrow-left"></i> Back</button>
+                    <span id="currentDocxName" class="pdf-name"></span>
+                    <div class="pdf-toolbar-actions">
+                        <button class="btn btn-primary" onclick="downloadDocxContent()"><i class="fas fa-download"></i> Download</button>
+                    </div>
+                </div>
+                <div id="docxViewerBody" class="doc-viewer-body docx-rendered-content"></div>
             </div>
         </section>
 
-        
         <section id="favoritesSection" class="tiles-section">
             <h2 class="section-title"><i class="fas fa-star"></i> Favorites</h2>
             <div id="favoritesContainer" class="tiles-grid"></div>
         </section>
 
-        
         <section id="recentSection" class="tiles-section">
             <h2 class="section-title"><i class="fas fa-history"></i> Recent</h2>
             <div id="recentContainer" class="tiles-grid"></div>
         </section>
 
-        
         <section id="analyticsSection" class="tiles-section">
             <h2 class="section-title"><i class="fas fa-chart-bar"></i> Analytics</h2>
-            
-            
             <div class="analytics-stats-row">
                 <div class="analytics-stat-card">
                     <div class="analytics-stat-icon"><i class="fas fa-desktop"></i></div>
@@ -393,7 +746,6 @@
             </div>
         </section>
 
-        
         <section id="plannerSection" class="tiles-section">
             <div class="section-header">
                 <h2 class="section-title"><i class="fas fa-calendar-alt"></i> Study Planner</h2>
@@ -418,7 +770,6 @@
             </div>
         </section>
 
-        
         <section id="flashcardsSection" class="tiles-section">
             <div class="section-header">
                 <h2 class="section-title"><i class="fas fa-layer-group"></i> Flashcards</h2>
@@ -427,7 +778,6 @@
             <div id="flashcardsGrid" class="flashcards-grid"></div>
         </section>
 
-        
         <section id="notesSection" class="tiles-section">
             <div class="section-header">
                 <h2 class="section-title"><i class="fas fa-sticky-note"></i> Notes</h2>
@@ -435,7 +785,6 @@
             </div>
             <div id="notesGrid" class="notes-grid"></div>
             
-            <!-- Voice Notes Section -->
             <div class="voice-notes-section">
                 <div class="section-header">
                     <h3 class="section-title"><i class="fas fa-microphone"></i> Voice Notes</h3>
@@ -451,7 +800,6 @@
             </div>
         </section>
 
-        <!-- Home Tags Panel (shown on home only) -->
         <div id="homeTagsSection" class="home-section-card" style="display:none;">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
                 <span class="section-label"><i class="fas fa-tags"></i> Tags</span>
@@ -460,7 +808,6 @@
             <div id="homeTagsList" style="display: flex; flex-wrap: wrap; gap: 10px;"></div>
         </div>
         
-        <!-- Home Tagged Items Panel (shown on home only) -->
         <div id="homeTaggedItemsSection" class="home-section-card" style="display:none;">
             <div style="margin-bottom: 12px;">
                 <span class="section-label"><i class="fas fa-folder-open"></i> Tagged Items</span>
@@ -468,7 +815,6 @@
             <div id="homeTaggedItemsList"></div>
         </div>
 
-        <!-- Tags Section (full page when nav clicked) -->
         <section id="tagsSection" class="tiles-section">
             <div class="section-header">
                 <h2 class="section-title"><i class="fas fa-tags"></i> Tags</h2>
@@ -483,8 +829,43 @@
             </div>
         </section>
 
+        <section id="importedSection" class="tiles-section">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                <span class="section-label"><i class="fas fa-book-open"></i> Document Library</span>
+                <button id="libraryEditBtn" type="button" class="btn-sm" onclick="toggleLibraryEditMode()">
+                    <i class="fas fa-edit"></i> Edit
+                </button>
+            </div>
+            
+            <div id="libraryEditControls" style="display:none; margin-bottom: 1rem; padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 0.5rem;">
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    <button type="button" class="btn-sm" onclick="openCreateLibraryFolderModal()">
+                        <i class="fas fa-folder-plus"></i> New Folder
+                    </button>
+                    <button type="button" class="btn-sm btn-primary" onclick="openPdfFilePicker()">
+                        <i class="fas fa-file-import"></i> Import Document
+                    </button>
+                </div>
+                <div id="libraryDropZone" class="library-drop-zone" ondragover="handleLibraryDragOver(event)" ondragleave="handleLibraryDragLeave(event)" ondrop="handleLibraryDrop(event)">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <p>Drag and drop PDF, Images, Word (.docx), or Text/MD files here</p>
+                </div>
+            </div>
+            
+            <div id="libraryBreadcrumb" class="library-breadcrumb" style="display:none;">
+                <button class="breadcrumb-item" onclick="navigateToLibraryRoot()">
+                    <i class="fas fa-home"></i> Library
+                </button>
+            </div>
+            
+            <div id="libraryContents" class="library-grid"></div>
+            
+            <div id="libraryEmptyState" class="library-empty-state" style="display:none;">
+                <i class="fas fa-folder-open"></i>
+                <p>No files yet. Click Edit to create folders or import documents.</p>
+            </div>
+        </section>
 
-        
         <section id="progressSection" class="tiles-section">
             <h2 class="section-title"><i class="fas fa-chart-line"></i> Progress</h2>
             
@@ -545,7 +926,6 @@
             </div>
         </section>
 
-        <!-- Reminders Section -->
         <section id="remindersSection" class="tiles-section" style="display:none;">
             <div class="section-header">
                 <h2 class="section-title"><i class="fas fa-bell"></i> Study Reminders</h2>
@@ -557,20 +937,13 @@
             </div>
         </section>
 
-        <!-- Study Room Section (Experimental) -->
-        <section id="studyRoomSection" class="tiles-section" style="display:none;">
-            <!-- Content rendered dynamically by studyRoom.js -->
-        </section>
+        <section id="studyRoomSection" class="tiles-section" style="display:none;"></section>
 
-        <!-- Settings Section -->
         <section id="settingsSection" class="tiles-section" style="display:none;">
             <h2 class="section-title"><i class="fas fa-cog"></i> Settings</h2>
             
-            <!-- Appearance -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-palette"></i> Appearance</h3>
-                
-                <!-- Mode toggle -->
                 <div class="setting-row">
                     <span class="setting-label">Mode</span>
                     <div class="mode-switcher" id="modeSwitcher">
@@ -583,7 +956,6 @@
                     </div>
                 </div>
 
-                <!-- Custom Theme Builder -->
                 <div class="setting-row" style="flex-direction: column; align-items: stretch;">
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem;">
                         <span class="setting-label" style="margin: 0;">Custom Theme</span>
@@ -693,7 +1065,6 @@
                 </div>
             </div>
 
-            <!-- Study Room Audio/Video -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-video"></i> Study Room Media</h3>
                 <p class="settings-hint">Configure your camera, microphone, and push-to-talk preferences.</p>
@@ -740,17 +1111,14 @@
                         <span class="toggle-slider"></span>
                     </div>
                 </div>
-                <p class="settings-hint" style="margin-top: 0.5rem; font-size: 0.8rem;">Change your shortcuts for Camera/Mic and PTT in the Keyboard Shortcuts section.</p>
             </div>
 
-            <!-- Dashboard Customization -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-th-large"></i> Dashboard Layout</h3>
                 <p class="settings-hint">Choose which widgets to show on your dashboard and their order.</p>
                 <div id="dashboardWidgets" class="widget-list"></div>
             </div>
 
-            <!-- Tags Management -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-tags"></i> Tags</h3>
                 <p class="settings-hint">Create custom tags to organize your flashcards, notes, and bookmarks.</p>
@@ -760,7 +1128,6 @@
                 <div id="tagsList" class="tags-list"></div>
             </div>
 
-            <!-- Voice Notes -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-microphone"></i> Voice Notes</h3>
                 <p class="settings-hint">Record voice memos to capture ideas quickly.</p>
@@ -773,33 +1140,27 @@
                 <div id="voiceNotesList" class="voice-notes-list"></div>
             </div>
 
-            <!-- Data Management -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-database"></i> Data Management</h3>
-                <p class="settings-hint">Export your data for backup or import from a previous backup.</p>
-                <div class="data-actions">
-                    <button id="exportAllDataBtn" class="btn btn-secondary btn-sm">
-                        <i class="fas fa-download"></i> Export All Data
-                    </button>
-                    <label for="importDataInput" class="btn btn-secondary btn-sm" style="cursor: pointer;">
-                        <i class="fas fa-upload"></i> Import Data
-                    </label>
+                <p class="settings-hint">Export your data, clear cached code updates, or reset local app data.</p>
+                <div class="data-actions" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;">
+                    <button id="exportAllDataBtn" class="btn btn-secondary btn-sm"><i class="fas fa-download"></i> Export Data</button>
+                    <label for="importDataInput" class="btn btn-secondary btn-sm" style="cursor: pointer;"><i class="fas fa-upload"></i> Import Data</label>
                     <input type="file" id="importDataInput" class="import-input" accept=".json">
+
                 </div>
             </div>
 
-            <!-- PDF Import -->
             <div class="settings-card">
-                <h3 class="settings-card-title"><i class="fas fa-file-pdf"></i> Import PDFs</h3>
-                <p class="settings-hint">Drag and drop PDF files to add them to your library.</p>
+                <h3 class="settings-card-title"><i class="fas fa-file-alt"></i> Import Documents</h3>
+                <p class="settings-hint">Drag and drop PDF, Image, Word (.docx), or Text/MD files to add them to your library.</p>
                 <div id="dropZone" onclick="openPdfFilePicker()">
                     <i class="fas fa-cloud-upload-alt"></i>
-                    <p>Drag & drop PDF files here</p>
-                    <p class="drop-hint">or click to browse</p>
+                    <p>Drag & drop document files here</p>
+                    <p class="drop-hint">PDFs, Images, Word (.docx), Text, Markdown</p>
                 </div>
             </div>
 
-            <!-- Keyboard Shortcuts -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-keyboard"></i> Keyboard Shortcuts</h3>
                 <p class="settings-hint">Click on any shortcut to change it. Press the new key combination to assign it.</p>
@@ -809,7 +1170,6 @@
                 </div>
             </div>
 
-            <!-- Alarm Sounds -->
             <div class="settings-card">
                 <h3 class="settings-card-title"><i class="fas fa-bell"></i> Alarm Sounds</h3>
                 <p class="settings-hint">Choose the sound that plays when timers, reminders, or planner events go off.</p>
@@ -863,7 +1223,30 @@
         </section>
     </div>
 
-    
+    <!-- Android & iOS Mobile Bottom Navigation Bar -->
+    <nav class="mobile-bottom-nav" id="mobileBottomNav" aria-label="Mobile Bottom Navigation">
+        <button class="mobile-bottom-nav-item active" data-view="home" id="mobileNavHome">
+            <i class="fas fa-home"></i>
+            <span>Home</span>
+        </button>
+        <button class="mobile-bottom-nav-item" data-view="favorites" id="mobileNavFavorites">
+            <i class="fas fa-star"></i>
+            <span>Favorites</span>
+        </button>
+        <button class="mobile-bottom-nav-item" data-view="recent" id="mobileNavRecent">
+            <i class="fas fa-history"></i>
+            <span>Recent</span>
+        </button>
+        <button class="mobile-bottom-nav-item" data-view="planner" id="mobileNavPlanner">
+            <i class="fas fa-calendar-alt"></i>
+            <span>Planner</span>
+        </button>
+        <button class="mobile-bottom-nav-item" data-view="more" id="mobileNavMore">
+            <i class="fas fa-ellipsis-h"></i>
+            <span>More</span>
+        </button>
+    </nav>
+
     <div class="accessibility-panel" id="accessibilityPanel">
         <h3><i class="fas fa-universal-access"></i> Accessibility</h3>
         <div class="accessibility-option" id="highContrastToggle">
@@ -884,9 +1267,10 @@
         </div>
     </div>
 
-    
+    <!-- Modals (with Mobile Bottom Sheet Handle) -->
     <div class="modal-overlay" id="noteModal">
         <div class="modal">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3 id="noteModalTitle"><i class="fas fa-sticky-note"></i> Create Note</h3>
                 <button class="modal-close" id="closeNoteModal"><i class="fas fa-times"></i></button>
@@ -919,9 +1303,9 @@
         </div>
     </div>
 
-    
     <div class="modal-overlay" id="flashcardModal">
         <div class="modal modal-lg">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3 id="flashcardModalTitle"><i class="fas fa-layer-group"></i> Create Flashcard Deck</h3>
                 <button class="modal-close" id="closeFlashcardModal"><i class="fas fa-times"></i></button>
@@ -954,9 +1338,9 @@
         </div>
     </div>
 
-    
     <div class="modal-overlay" id="studyModal">
         <div class="modal">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3 id="studyModalTitle"><i class="fas fa-graduation-cap"></i> Study Mode</h3>
                 <button class="modal-close" id="closeStudyModal"><i class="fas fa-times"></i></button>
@@ -981,9 +1365,9 @@
         </div>
     </div>
 
-    
     <div class="modal-overlay" id="sessionModal">
         <div class="modal">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3 id="sessionModalTitle"><i class="fas fa-calendar-plus"></i> Add Study Session</h3>
                 <button class="modal-close" id="closeSessionModal"><i class="fas fa-times"></i></button>
@@ -1017,22 +1401,20 @@
         </div>
     </div>
 
-    <!-- Quiz Modal -->
     <div class="modal-overlay" id="quizModal">
         <div class="modal modal-lg">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3 id="quizModalTitle"><i class="fas fa-question-circle"></i> Quiz Mode</h3>
                 <button class="modal-close" id="closeQuizModal" type="button" onclick="closeQuizModal()"><i class="fas fa-times"></i></button>
             </div>
-            <div class="modal-body" id="quizContent">
-                <!-- Quiz content populated by JS -->
-            </div>
+            <div class="modal-body" id="quizContent"></div>
         </div>
     </div>
 
-    <!-- Reminder Modal -->
     <div class="modal-overlay" id="reminderModal">
         <div class="modal">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3><i class="fas fa-bell"></i> Add Study Reminder</h3>
                 <button class="modal-close" id="closeReminderModal" type="button" onclick="closeReminderModal()"><i class="fas fa-times"></i></button>
@@ -1066,9 +1448,9 @@
         </div>
     </div>
 
-    <!-- Tag Creation Modal -->
     <div class="modal-overlay" id="tagModal">
         <div class="modal">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3><i class="fas fa-tag"></i> Create Tag</h3>
                 <button class="modal-close" id="closeTagModal" type="button" onclick="closeTagModal()"><i class="fas fa-times"></i></button>
@@ -1090,9 +1472,9 @@
         </div>
     </div>
 
-    <!-- Bookmark Modal -->
     <div class="modal-overlay" id="bookmarkModal">
         <div class="modal">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3><i class="fas fa-bookmark"></i> Add Bookmark</h3>
                 <button class="modal-close" id="closeBookmarkModal" type="button" onclick="closeBookmarkModal()"><i class="fas fa-times"></i></button>
@@ -1114,9 +1496,9 @@
         </div>
     </div>
 
-    <!-- Tag Item Modal -->
     <div class="modal-overlay" id="tagItemModal">
         <div class="modal">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3><i class="fas fa-tag"></i> Add Tags to Item</h3>
                 <button class="modal-close" id="closeTagItemModal" type="button" onclick="closeTagItemModal()"><i class="fas fa-times"></i></button>
@@ -1138,9 +1520,9 @@
         </div>
     </div>
 
-    <!-- Library Folder Modal -->
     <div class="modal-overlay" id="libraryFolderModal">
         <div class="modal-content">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3 id="libraryFolderModalTitle"><i class="fas fa-folder-plus"></i> Create Folder</h3>
                 <button class="modal-close" type="button" onclick="closeLibraryFolderModal()"><i class="fas fa-times"></i></button>
@@ -1170,9 +1552,9 @@
         </div>
     </div>
 
-    <!-- Move Item Modal -->
     <div class="modal-overlay" id="moveItemModal">
         <div class="modal-content">
+            <div class="modal-sheet-handle"></div>
             <div class="modal-header">
                 <h3><i class="fas fa-arrows-alt"></i> Move Item</h3>
                 <button class="modal-close" type="button" onclick="closeMoveItemModal()"><i class="fas fa-times"></i></button>
@@ -1188,13 +1570,30 @@
         </div>
     </div>
     
-    
+    <div class="download-progress-bar" id="downloadProgressBar" style="display: none;">
+        <div class="download-progress-info">
+            <i class="fas fa-download"></i>
+            <span class="download-progress-text" id="downloadProgressText">Downloading update...</span>
+        </div>
+        <div class="download-progress-track">
+            <div class="download-progress-fill" id="downloadProgressFill"></div>
+        </div>
+        <span class="download-progress-percent" id="downloadProgressPercent">0%</span>
+    </div>
 
+    <div class="content-progress-bar" id="contentProgressBar" style="display: none;">
+        <div class="content-progress-info">
+            <i class="fas fa-cloud-download-alt"></i>
+            <span class="content-progress-text" id="contentProgressText">Downloading new content...</span>
+        </div>
+        <div class="content-progress-track">
+            <div class="content-progress-fill" id="contentProgressFill"></div>
+        </div>
+    </div>
     
     <button class="quick-links-toggle" id="quickLinksToggle" title="Quick Links">
         <i class="fas fa-link"></i>
     </button>
-    
     
     <div class="quick-links-panel" id="quickLinksPanel">
         <div class="quick-links-header">
@@ -1208,7 +1607,6 @@
             <i class="fas fa-plus"></i> Add Current Location
         </button>
     </div>
-    
     
     <div class="timer-panel" id="timerPanel" style="display:none;">
         <div class="timer-header" id="timerDragHandle">
@@ -1256,18 +1654,17 @@
         <div class="timer-resize-handle" id="timerResizeHandle"></div>
     </div>
     
-    
     <button class="timer-reopen-btn" id="timerReopenBtn" style="display:none;" title="Reopen Timer">
         <i class="fas fa-stopwatch"></i>
     </button>
 </div>
 
-
-<script src="js/hotUpdater.js?v=99"></script>
-<script src="js/contentUpdater.js?v=99"></script>
+<script src="js/hotUpdater.js?v=120"></script>
+<script src="js/contentUpdater.js?v=120"></script>
 <script src="js/features.js?v=114"></script>
 <script src="js/studyRoom.js?v=117"></script>
 <script src="js/app.js?v=115"></script>
+
+
 </body>
 </html>
-
