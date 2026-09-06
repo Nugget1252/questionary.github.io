@@ -1,9 +1,7 @@
 
-
 (function (window, document) {
   'use strict';
 
-  // Polyfill WebRTC Constructors
   const RTCPeerConnection = window.RTCPeerConnection ||
                             window.webkitRTCPeerConnection ||
                             window.mozRTCPeerConnection ||
@@ -19,11 +17,8 @@
                           window.mozRTCIceCandidate ||
                           null;
 
-  console.log('[StudyRoom] Booting Master Study Room Engine v26.0 (Live ScreenShare Stream Sync)...');
+  console.log('[StudyRoom] Booting Master Study Room Engine v27.0 (Procedural WebAudio Synthesizers)...');
 
-  /* =========================================================================
-   * 1. CONSTANTS, CODECS & ICE SERVERS
-   * ========================================================================= */
   const ROOM_CODE_LENGTH = 10;
   const BASE32_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   const PEERJS_CDN = 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';
@@ -49,9 +44,6 @@
     iceCandidatePoolSize: 4
   };
 
-  /* ----------------------------------------------------------------
-   * ROOM CODE NORMALIZER & GENERATOR
-   * ---------------------------------------------------------------- */
   function normalizeRoomCode(raw) {
     if (!raw) return '';
     return raw
@@ -89,11 +81,12 @@
   }
 
   /* =========================================================================
-   * 2. AUDIO SYNTHESIZER & SOUNDSCAPE ENGINE
+   * PROCEDURAL SOUND SYNTHESIZER & SOUNDSCAPE ENGINE
    * ========================================================================= */
   const SoundFX = {
     ctx: null,
     ambienceNodes: {},
+    ambienceIntervals: [],
 
     init() {
       try {
@@ -105,6 +98,44 @@
           this.ctx.resume().catch(() => {});
         }
       } catch (e) {}
+    },
+
+    _createPinkNoiseBuffer(ctx, durationSec = 6) {
+      const sampleRate = ctx.sampleRate;
+      const bufferSize = sampleRate * durationSec;
+      const buffer = ctx.createBuffer(2, bufferSize, sampleRate);
+      for (let channel = 0; channel < 2; channel++) {
+        const output = buffer.getChannelData(channel);
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.96900 * b2 + white * 0.1538520;
+          b3 = 0.86650 * b3 + white * 0.3104856;
+          b4 = 0.55000 * b4 + white * 0.5329522;
+          b5 = -0.7616 * b5 - white * 0.0168980;
+          output[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+          b6 = white * 0.115926;
+        }
+      }
+      return buffer;
+    },
+
+    _createBrownNoiseBuffer(ctx, durationSec = 6) {
+      const sampleRate = ctx.sampleRate;
+      const bufferSize = sampleRate * durationSec;
+      const buffer = ctx.createBuffer(2, bufferSize, sampleRate);
+      for (let channel = 0; channel < 2; channel++) {
+        const output = buffer.getChannelData(channel);
+        let lastOut = 0.0;
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          lastOut = (lastOut + (0.02 * white)) / 1.02;
+          output[i] = lastOut * 3.5;
+        }
+      }
+      return buffer;
     },
 
     playTone(freq, type = 'sine', duration = 0.15, gain = 0.1) {
@@ -157,93 +188,282 @@
       const ctx = this.ctx;
 
       try {
-        if (track === 'binaural') {
+        const masterGain = ctx.createGain();
+        masterGain.gain.setValueAtTime(Math.max(0, Math.min(1, volume)), ctx.currentTime);
+        masterGain.connect(ctx.destination);
+        this.ambienceNodes = { masterGain, sources: [] };
+
+        if (track === 'rain') {
+          const pinkBuffer = this._createPinkNoiseBuffer(ctx, 6);
+          const pinkSource = ctx.createBufferSource();
+          pinkSource.buffer = pinkBuffer;
+          pinkSource.loop = true;
+
+          const rainLowpass = ctx.createBiquadFilter();
+          rainLowpass.type = 'lowpass';
+          rainLowpass.frequency.value = 1100;
+
+          const rainHighpass = ctx.createBiquadFilter();
+          rainHighpass.type = 'highpass';
+          rainHighpass.frequency.value = 250;
+
+          const rainGain = ctx.createGain();
+          rainGain.gain.value = 0.75;
+
+          pinkSource.connect(rainLowpass);
+          rainLowpass.connect(rainHighpass);
+          rainHighpass.connect(rainGain);
+          rainGain.connect(masterGain);
+          pinkSource.start();
+          this.ambienceNodes.sources.push(pinkSource);
+
+          const spawnDrop = () => {
+            if (!this.ambienceNodes.masterGain) return;
+            try {
+              const osc = ctx.createOscillator();
+              const g = ctx.createGain();
+              const filt = ctx.createBiquadFilter();
+
+              const freq = 1400 + Math.random() * 1800;
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(freq, ctx.currentTime);
+              osc.frequency.exponentialRampToValueAtTime(freq * 0.5, ctx.currentTime + 0.04);
+
+              filt.type = 'bandpass';
+              filt.frequency.value = freq;
+              filt.Q.value = 4.0;
+
+              const dropVol = 0.02 + Math.random() * 0.05;
+              g.gain.setValueAtTime(dropVol, ctx.currentTime);
+              g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.04);
+
+              osc.connect(filt);
+              filt.connect(g);
+              g.connect(masterGain);
+
+              osc.start();
+              osc.stop(ctx.currentTime + 0.05);
+            } catch (e) {}
+
+            const nextIn = 80 + Math.random() * 220;
+            const timer = setTimeout(spawnDrop, nextIn);
+            this.ambienceIntervals.push(timer);
+          };
+          spawnDrop();
+
+        } else if (track === 'waves') {
+          const brownBuffer = this._createBrownNoiseBuffer(ctx, 8);
+          const brownSource = ctx.createBufferSource();
+          brownSource.buffer = brownBuffer;
+          brownSource.loop = true;
+
+          const pinkBuffer = this._createPinkNoiseBuffer(ctx, 8);
+          const pinkSource = ctx.createBufferSource();
+          pinkSource.buffer = pinkBuffer;
+          pinkSource.loop = true;
+
+          const waveFilter = ctx.createBiquadFilter();
+          waveFilter.type = 'lowpass';
+          waveFilter.frequency.value = 450;
+          waveFilter.Q.value = 1.8;
+
+          const waveGain = ctx.createGain();
+          waveGain.gain.value = 0.65;
+
+          const lfoOsc = ctx.createOscillator();
+          lfoOsc.type = 'sine';
+          lfoOsc.frequency.value = 0.12;
+
+          const lfoGain = ctx.createGain();
+          lfoGain.gain.value = 350;
+          lfoOsc.connect(lfoGain);
+          lfoGain.connect(waveFilter.frequency);
+
+          const lfoGainOsc = ctx.createOscillator();
+          lfoGainOsc.type = 'sine';
+          lfoGainOsc.frequency.value = 0.12;
+
+          const lfoAmpGain = ctx.createGain();
+          lfoAmpGain.gain.value = 0.35;
+          lfoGainOsc.connect(lfoAmpGain);
+          lfoAmpGain.connect(waveGain.gain);
+
+          brownSource.connect(waveFilter);
+          pinkSource.connect(waveFilter);
+          waveFilter.connect(waveGain);
+          waveGain.connect(masterGain);
+
+          brownSource.start();
+          pinkSource.start();
+          lfoOsc.start();
+          lfoGainOsc.start();
+
+          this.ambienceNodes.sources.push(brownSource, pinkSource, lfoOsc, lfoGainOsc);
+
+        } else if (track === 'campfire') {
+          const brownBuffer = this._createBrownNoiseBuffer(ctx, 6);
+          const brownSource = ctx.createBufferSource();
+          brownSource.buffer = brownBuffer;
+          brownSource.loop = true;
+
+          const hearthFilter = ctx.createBiquadFilter();
+          hearthFilter.type = 'lowpass';
+          hearthFilter.frequency.value = 320;
+
+          const hearthGain = ctx.createGain();
+          hearthGain.gain.value = 0.55;
+
+          brownSource.connect(hearthFilter);
+          hearthFilter.connect(hearthGain);
+          hearthGain.connect(masterGain);
+          brownSource.start();
+          this.ambienceNodes.sources.push(brownSource);
+
+          const spawnCrackle = () => {
+            if (!this.ambienceNodes.masterGain) return;
+            try {
+              const bufferSize = Math.floor(ctx.sampleRate * 0.015);
+              const crackleBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+              const data = crackleBuffer.getChannelData(0);
+              for (let i = 0; i < bufferSize; i++) {
+                data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.25));
+              }
+
+              const crackleSource = ctx.createBufferSource();
+              crackleSource.buffer = crackleBuffer;
+
+              const crackleFilter = ctx.createBiquadFilter();
+              crackleFilter.type = 'bandpass';
+              crackleFilter.frequency.value = 2000 + Math.random() * 3200;
+              crackleFilter.Q.value = 3.5;
+
+              const cGain = ctx.createGain();
+              cGain.gain.value = 0.05 + Math.random() * 0.14;
+
+              crackleSource.connect(crackleFilter);
+              crackleFilter.connect(cGain);
+              cGain.connect(masterGain);
+
+              crackleSource.start();
+              crackleSource.stop(ctx.currentTime + 0.02);
+            } catch (e) {}
+
+            const nextCrackle = 40 + Math.random() * 280;
+            const timer = setTimeout(spawnCrackle, nextCrackle);
+            this.ambienceIntervals.push(timer);
+          };
+          spawnCrackle();
+
+        } else if (track === 'binaural') {
           const oscL = ctx.createOscillator();
           const oscR = ctx.createOscillator();
+          const subOsc = ctx.createOscillator();
           const merger = ctx.createChannelMerger(2);
-          const gain = ctx.createGain();
+          const droneGain = ctx.createGain();
 
-          oscL.frequency.value = 216;
-          oscR.frequency.value = 226;
+          oscL.type = 'sine';
+          oscR.type = 'sine';
+          subOsc.type = 'sine';
+
+          oscL.frequency.value = 136.1;
+          oscR.frequency.value = 146.1;
+          subOsc.frequency.value = 68.05;
 
           oscL.connect(merger, 0, 0);
           oscR.connect(merger, 0, 1);
-          merger.connect(gain);
-          gain.gain.value = volume * 0.25;
-          gain.connect(ctx.destination);
+          merger.connect(droneGain);
+
+          const subGain = ctx.createGain();
+          subGain.gain.value = 0.2;
+          subOsc.connect(subGain);
+          subGain.connect(droneGain);
+
+          droneGain.gain.value = 0.45;
+          droneGain.connect(masterGain);
+
+          const pinkBuffer = this._createPinkNoiseBuffer(ctx, 6);
+          const pinkSource = ctx.createBufferSource();
+          pinkSource.buffer = pinkBuffer;
+          pinkSource.loop = true;
+
+          const pinkFilter = ctx.createBiquadFilter();
+          pinkFilter.type = 'lowpass';
+          pinkFilter.frequency.value = 380;
+
+          const pinkGain = ctx.createGain();
+          pinkGain.gain.value = 0.2;
+
+          pinkSource.connect(pinkFilter);
+          pinkFilter.connect(pinkGain);
+          pinkGain.connect(masterGain);
 
           oscL.start();
           oscR.start();
-          this.ambienceNodes = { oscL, oscR, gain };
-          return;
-        }
+          subOsc.start();
+          pinkSource.start();
 
-        const bufferSize = ctx.sampleRate * 2;
-        const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const output = noiseBuffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-          output[i] = Math.random() * 2 - 1;
-        }
+          this.ambienceNodes.sources.push(oscL, oscR, subOsc, pinkSource);
 
-        const whiteNoise = ctx.createBufferSource();
-        whiteNoise.buffer = noiseBuffer;
-        whiteNoise.loop = true;
-
-        const filter = ctx.createBiquadFilter();
-        if (track === 'rain') {
-          filter.type = 'lowpass';
-          filter.frequency.value = 850;
-        } else if (track === 'campfire') {
-          filter.type = 'bandpass';
-          filter.frequency.value = 1200;
-          filter.Q.value = 3.0;
-        } else if (track === 'waves') {
-          filter.type = 'lowpass';
-          filter.frequency.value = 450;
         } else {
-          filter.type = 'allpass';
+          // Warm Brown Noise with subtle panning drift
+          const brownBuffer = this._createBrownNoiseBuffer(ctx, 8);
+          const brownSource = ctx.createBufferSource();
+          brownSource.buffer = brownBuffer;
+          brownSource.loop = true;
+
+          const focusFilter = ctx.createBiquadFilter();
+          focusFilter.type = 'lowpass';
+          focusFilter.frequency.value = 650;
+          focusFilter.Q.value = 0.7;
+
+          const focusGain = ctx.createGain();
+          focusGain.gain.value = 0.8;
+
+          brownSource.connect(focusFilter);
+          focusFilter.connect(focusGain);
+          focusGain.connect(masterGain);
+
+          brownSource.start();
+          this.ambienceNodes.sources.push(brownSource);
         }
-
-        const gain = ctx.createGain();
-        gain.gain.value = volume;
-
-        whiteNoise.connect(filter);
-        filter.connect(gain);
-        gain.connect(ctx.destination);
-
-        whiteNoise.start();
-        this.ambienceNodes = { whiteNoise, gain };
       } catch (e) {
         console.warn('[SoundFX] Ambience error:', e);
       }
     },
 
     setAmbienceVolume(volume) {
-      if (this.ambienceNodes.gain) {
-        this.ambienceNodes.gain.gain.value = volume;
+      if (this.ambienceNodes && this.ambienceNodes.masterGain && this.ctx) {
+        const vol = Math.max(0, Math.min(1, volume));
+        this.ambienceNodes.masterGain.gain.setValueAtTime(vol, this.ctx.currentTime);
       }
     },
 
     stopAmbience() {
-      try {
-        if (this.ambienceNodes.whiteNoise) {
-          this.ambienceNodes.whiteNoise.stop();
-          this.ambienceNodes.whiteNoise.disconnect();
-        }
-        if (this.ambienceNodes.oscL) {
-          this.ambienceNodes.oscL.stop();
-          this.ambienceNodes.oscR.stop();
-          this.ambienceNodes.oscL.disconnect();
-          this.ambienceNodes.oscR.disconnect();
-        }
-      } catch (e) {}
+      if (this.ambienceIntervals && this.ambienceIntervals.length > 0) {
+        this.ambienceIntervals.forEach(t => clearTimeout(t));
+        this.ambienceIntervals = [];
+      }
+
+      if (this.ambienceNodes && this.ambienceNodes.sources) {
+        this.ambienceNodes.sources.forEach(src => {
+          try {
+            if (typeof src.stop === 'function') src.stop();
+            if (typeof src.disconnect === 'function') src.disconnect();
+          } catch (e) {}
+        });
+      }
+
+      if (this.ambienceNodes && this.ambienceNodes.masterGain) {
+        try {
+          this.ambienceNodes.masterGain.disconnect();
+        } catch (e) {}
+      }
+
       this.ambienceNodes = {};
     }
   };
 
-  /* =========================================================================
-   * 3. APPLICATION STATE
-   * ========================================================================= */
+  /* Application State */
   let peerInstance = null;
   let peerDataConns = new Map();
   let peerMediaCalls = new Map();
@@ -320,9 +540,6 @@
 
   let abortController = new AbortController();
 
-  /* =========================================================================
-   * 4. UTILITIES
-   * ========================================================================= */
   function fmtTime(sec) {
     const s = Math.max(0, Math.floor(sec));
     const h = Math.floor(s / 3600);
@@ -362,7 +579,6 @@
     } catch (e) {}
   }
 
-  // Generates carrier fallback stream with both audio and video dummy tracks
   function createCarrierStream() {
     const stream = new MediaStream();
     try {
@@ -380,7 +596,6 @@
       osc.start();
       stream.addTrack(dst.stream.getAudioTracks()[0]);
 
-      // Add dummy black 2x2 video canvas track to pre-negotiate SDP video m-line
       const c = document.createElement('canvas');
       c.width = 2; c.height = 2;
       const cCtx = c.getContext('2d');
@@ -396,9 +611,6 @@
     return stream;
   }
 
-  /* =========================================================================
-   * 5. BROADCAST & MESH RELAY ENGINE
-   * ========================================================================= */
   function broadcastData(data) {
     let payload;
     try {
@@ -596,9 +808,6 @@
     }
   }
 
-  /* =========================================================================
-   * 6. PEERJS DATA & REAL-TIME MEDIA CALL ENGINE
-   * ========================================================================= */
   function setupPeerDataConnection(conn) {
     conn.on('open', () => {
       if (isHost && roomPassword) {
@@ -646,7 +855,6 @@
         } catch (e) {}
       }
 
-      // Initiate media call to peer
       callPeerMedia(conn.peer);
     });
 
@@ -730,7 +938,6 @@
       });
     }
 
-    // Fill missing tracks with pre-warmed carrier tracks
     if (!hasAudio || !hasVideo) {
       const carrier = createCarrierStream();
       if (!hasAudio && carrier.getAudioTracks().length > 0) {
@@ -749,7 +956,6 @@
     const stream = getActiveCombinedStream();
 
     try {
-      // Close previous call if open to force full WebRTC track renegotiation
       if (peerMediaCalls.has(remotePeerId)) {
         try { peerMediaCalls.get(remotePeerId).close(); } catch (e) {}
         peerMediaCalls.delete(remotePeerId);
@@ -788,9 +994,6 @@
     });
   }
 
-  /* =========================================================================
-   * 7. HARDWARE CONTROLLERS & AUDIO ANALYSIS (ELECTRON + WEB SAFE)
-   * ========================================================================= */
   async function toggleMicrophone() {
     try {
       if (!localAudioStream) {
@@ -833,7 +1036,6 @@
     }
   }
 
-  // Universal Screen Share Controller (Supports Electron DesktopCapturer & Web)
   async function toggleScreenShare() {
     const btn = document.getElementById('srToggleScreenShare');
     if (localScreenStream) {
@@ -842,7 +1044,6 @@
     }
 
     try {
-      // 1. Electron Desktop Capturer Check
       if (window.electronAPI?.getDesktopSources) {
         try {
           const sources = await window.electronAPI.getDesktopSources({ types: ['screen', 'window'] });
@@ -866,7 +1067,6 @@
         }
       }
 
-      // 2. Standard Browser Fallback
       if (!localScreenStream) {
         localScreenStream = await navigator.mediaDevices.getDisplayMedia({
           video: { cursor: 'always' },
@@ -883,7 +1083,6 @@
       setSpotlight('self');
       if (!isSoloMode) broadcastData({ type: 'screen-share-status', active: true, nickname });
 
-      // Force full-mesh stream renegotiation to peers
       broadcastMediaToAllPeers();
       notify('Screen sharing active.', 'success');
     } catch (err) {
@@ -946,7 +1145,6 @@
     }
     if (!tile) return;
 
-    // Filter out dummy black carrier tracks so we only treat REAL video as active
     const realVideoTracks = stream.getVideoTracks().filter(t => t.enabled && t.readyState === 'live');
     const hasVideo = realVideoTracks.length > 0;
     const off = tile.querySelector('.sr-video-off');
@@ -980,7 +1178,6 @@
       }
       safePlayMedia(camVideo);
 
-      // If this peer is the active screenshare owner, display stream in the Spotlight stage
       if (screenShareOwnerId === userId) {
         const spotVideo = document.getElementById('srSpotlightVideo');
         if (spotVideo) {
@@ -1107,9 +1304,7 @@
     }, { signal });
   }
 
-  /* =========================================================================
-   * 8. UI — LOBBY
-   * ========================================================================= */
+  /* Lobby View */
   function renderStudyRoom() {
     const section = document.getElementById('studyRoomSection');
     if (!section) return;
@@ -1187,9 +1382,7 @@
     });
   }
 
-  /* =========================================================================
-   * 9. UI — ACTIVE SESSION
-   * ========================================================================= */
+  /* Active Session View */
   function renderActiveSession() {
     const section = document.getElementById('studyRoomSection');
     if (!section) return;
@@ -1536,9 +1729,6 @@
     else grid.classList.add('sr-grid-4plus');
   }
 
-  /* =========================================================================
-   * 10. POMODORO ENGINE
-   * ========================================================================= */
   function startStudyTimerEngine() {
     if (mainInterval) clearInterval(mainInterval);
 
@@ -1659,9 +1849,6 @@
     }
   }
 
-  /* =========================================================================
-   * 11. LISTENERS & CHAT PIPELINE
-   * ========================================================================= */
   function attachSessionListeners() {
     abortController.abort();
     abortController = new AbortController();
@@ -1871,9 +2058,7 @@
     renderChatMessages();
   }
 
-  /* =========================================================================
-   * 12. VECTOR WHITEBOARD
-   * ========================================================================= */
+  /* Vector Whiteboard */
   function toggleWhiteboard() {
     wbActive = !wbActive;
     const panel = document.getElementById('srWhiteboardPanel');
@@ -2315,9 +2500,7 @@
     notify('Whiteboard exported as image.', 'success');
   }
 
-  /* =========================================================================
-   * 13. QUESTIONS & NOTES
-   * ========================================================================= */
+  /* Questions */
   function addQuestion() {
     const id = wbNextQId++;
     wbQuestions.push({ id, question: '', answer: '' });
@@ -2383,9 +2566,7 @@
     if (badge) badge.textContent = 1 + Object.keys(peers).length;
   }
 
-  /* =========================================================================
-   * 14. SESSION FLOW (CREATION & JOINING)
-   * ========================================================================= */
+  /* Creation / Join Flow */
   async function handleCreate() {
     SoundFX.init();
     nickname = document.getElementById('srNickname')?.value.trim() || 'Host';
@@ -2637,9 +2818,6 @@
     if (overlay) overlay.style.display = 'none';
   }
 
-  /* =========================================================================
-   * 15. HARDWARE TESTING
-   * ========================================================================= */
   async function testMicrophone() {
     try {
       const select = document.getElementById('audioInputSelect');
@@ -2746,22 +2924,9 @@
     }
   }
 
-  // Graceful browser shutdown handling
-  window.addEventListener('beforeunload', () => {
-    if (sessionActive) {
-      doLeave();
-    }
-  });
+  window.addEventListener('beforeunload', () => { if (sessionActive) doLeave(); });
+  window.addEventListener('pagehide', () => { if (sessionActive) doLeave(); });
 
-  window.addEventListener('pagehide', () => {
-    if (sessionActive) {
-      doLeave();
-    }
-  });
-
-  /* =========================================================================
-   * 16. GLOBAL EXPORTS
-   * ========================================================================= */
   window.renderStudyRoom = renderStudyRoom;
   window.leaveStudyRoom = leaveRoom;
   window.srToggleMicrophone = toggleMicrophone;
@@ -2794,3 +2959,4 @@
   }
 
 })(window, document);
+
